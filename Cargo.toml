@@ -1,0 +1,11 @@
+#![feature(integer_sign_cast)]
+[package]
+name = "learning_ffmpeg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ffmpeg-next = "7.1.0"
+num = "0.4.3"
+sdl3 = { version = "0.14.40", features = ["build-from-source-static", "static-link", "use-vcpkg"] }
+vcpkg = "0.2.15"
