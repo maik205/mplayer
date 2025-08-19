@@ -1,6 +1,7 @@
 use std::{
     collections::{self, VecDeque},
     env,
+    net::Shutdown,
     time::Instant,
 };
 
@@ -11,12 +12,15 @@ use ffmpeg_next::{
 };
 use sdl3::{EventPump, Sdl, VideoSubsystem, event::Event, render::Canvas, video::Window};
 
+use crate::Command;
+
 pub struct MPlayer {
     sdl_window: Window,
     sdl_video: VideoSubsystem,
     sdl_context: Sdl,
     initialized_at: Instant,
     sdl_event_pump: EventPump,
+    pub should_exit: bool,
 }
 const WINDOW_WIDTH: u32 = 1920;
 const WINDOW_HEIGHT: u32 = 1080;
@@ -36,18 +40,33 @@ impl MPlayer {
                 sdl_context: sdl_ctx,
                 sdl_event_pump,
                 initialized_at: Instant::now(),
+                should_exit: false,
             });
         }
-        Err(MPlayerError::WindowFailed)
+        Err(MPlayerError::WindowCreationFailed)
     }
     //
-    pub fn tick(&mut self) -> bool {
+    pub fn tick(&mut self, cli_command: Option<Command>) -> () {
+        if let Some(command) = cli_command {
+            self.process_command(command);
+        }
         for event in self.sdl_event_pump.poll_iter() {
-            if let Event::Quit { .. } = event {
-                return true;
+            match event {
+                Event::Quit { .. } => {
+                    self.should_exit = true;
+                }
+                _ => {}
             }
         }
-        return false;
+    }
+
+    pub fn process_command(&mut self, command: Command) -> () {
+        match command {
+            Command::Shutdown => {
+                self.should_exit = true;
+            }
+            _ => {}
+        }
     }
 }
 pub struct MPlayerEvent {
@@ -56,12 +75,7 @@ pub struct MPlayerEvent {
 }
 
 pub enum MPlayerError {
-    WindowFailed,
-}
-
-pub enum MPlayerShouldExit {
-    True,
-    False,
+    WindowCreationFailed,
 }
 
 pub enum MPlayerEventType {}
