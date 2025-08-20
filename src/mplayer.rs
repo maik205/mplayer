@@ -71,7 +71,6 @@ impl MPlayer {
 }
 pub struct MPlayerEvent {
     handler: Option<MEventHandler>,
-    //Event src, event type, and others
 }
 
 pub enum MPlayerError {

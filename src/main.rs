@@ -19,7 +19,7 @@ fn main() {
                 if let Ok(command) = rx.try_recv() {
                     tick_cmd = Some(command);
                 };
-                
+
                 player.tick(tick_cmd);
 
                 if player.should_exit {
