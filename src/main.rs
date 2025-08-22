@@ -43,6 +43,12 @@ fn main() {
                         }
                         break 'command;
                     }
+                    val if val.contains("open") => {
+                        if let Some(dir) = val.split("open").nth(1) {
+                            let _ =
+                                tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
+                        }
+                    }
                     _ => {}
                 }
             }

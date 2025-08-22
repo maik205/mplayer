@@ -150,6 +150,7 @@ dependencies = [
  "ffmpeg-next",
  "num",
  "sdl3",
+ "sdl3-sys",
  "vcpkg",
 ]
 
