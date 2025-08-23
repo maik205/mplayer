@@ -92,26 +92,8 @@ impl MPlayer {
                     });
                 self.canvas.clear();
                 self.player_stats.time_to_present = timer.elapsed().as_secs_f32();
-                let _ = self.canvas.copy(
-                    &self.video_texture,
-                    Some(FRect {
-                        x: 0.0,
-                        y: 0.0,
-                        w: 1920.,
-                        h: 1080.,
-                    }),
-                    Some(FRect {
-                        x: 0.0,
-                        y: 0.0,
-                        w: 1920.,
-                        h: 1080.,
-                    }),
-                );
+                let _ = self.canvas.copy(&self.video_texture, None, None);
                 self.canvas.present();
-                println!(
-                    "[DEBUG] {}s to present frame",
-                    self.player_stats.time_to_present
-                );
             } else {
                 self.decoder.take();
                 self.canvas.clear();
@@ -142,6 +124,7 @@ impl MPlayer {
                             scaling_flag: Flags::BILINEAR,
                             output_w: w,
                             output_h: h,
+                            lookahead_count_video: 5,
                         }),
                     ) {
                         self.decoder = Some(decoder);
