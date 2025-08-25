@@ -19,7 +19,7 @@ pub struct MPlayer {
     _initialized_at: Instant,
     sdl_event_pump: EventPump,
     pub should_exit: bool,
-    decoder: Option<MDecode>,
+    pub decoder: Option<MDecode>,
     canvas: Canvas<Window>,
     video_texture: Texture,
     player_stats: MPlayerStats,

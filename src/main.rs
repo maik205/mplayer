@@ -9,21 +9,26 @@ use crate::mplayer::MPlayer;
 
 mod decode;
 mod mplayer;
+mod utils;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
     let player_thread = thread::spawn(move || {
         if let Ok(mut player) = MPlayer::setup() {
             loop {
-                let mut tick_cmd = None;
-                if let Ok(command) = rx.try_recv() {
-                    tick_cmd = Some(command);
-                };
-
-                player.tick(tick_cmd);
-
                 if player.should_exit {
                     exit(0);
+                }
+                if player.decoder.is_none() {
+                    if let Ok(command) = rx.recv() {
+                        player.tick(Some(command));
+                    }
+                } else {
+                    let mut cli_command = None;
+                    if let Ok(command) = rx.try_recv() {
+                        cli_command = Some(command);
+                    }
+                    player.tick(cli_command);
                 }
             }
         } else {
