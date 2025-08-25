@@ -1,9 +1,8 @@
-use std::collections::{VecDeque, vec_deque};
+use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
 
+use ffmpeg_next::codec::context;
 use ffmpeg_next::{self as ffmpeg, Rational, format};
 use ffmpeg_next::{
     format::input,
@@ -11,8 +10,9 @@ use ffmpeg_next::{
     software::{self},
     util::frame,
 };
+use sdl3::libc::TIOCM_CTS;
 
-use crate::utils::Range;
+use crate::utils::{Range, RangeCheck};
 
 #[derive(Debug, Clone)]
 pub struct MDecodeOptions {
@@ -27,7 +27,7 @@ pub struct MDecode {
     // pub inner: MDecodeInner,
     pub decoder_stats: MDecoderStats,
     pub decoder_output: Receiver<Option<MDecodeFrame>>,
-    pub decoder_commander: Sender<DecoderCommand>,
+    pub decoder_commander: Sender<Option<DecoderCommand>>,
     pub is_active: bool,
     pub thread_reference: JoinHandle<()>,
 }
@@ -61,9 +61,12 @@ impl Iterator for &mut MDecode {
     type Item = MDecodeFrame;
 
     fn next(&mut self) -> Option<Self::Item> {
-        return Some(MDecodeFrame {
-            frame: output_buffer,
-        });
+        if let Ok(frame) = self.decoder_output.recv() {
+            let _ = self.decoder_commander.send(Some(DecoderCommand::Take));
+
+            return frame;
+        }
+        return None;
     }
 }
 
@@ -76,51 +79,55 @@ enum DecoderCommand {
 }
 pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
     let (decoder_tx, context_rx) = mpsc::channel::<Option<MDecodeFrame>>();
-    let (context_tx, decoder_rx) = mpsc::channel::<DecoderCommand>();
+    let (context_tx, decoder_rx) = mpsc::channel::<Option<DecoderCommand>>();
 
     let decoder_thread = thread::spawn(move || {
         let decoder_tx = decoder_tx;
         let decoder_rx = decoder_rx;
-        let mut buffer_size = 0;
+        let mut to_take = 0;
         let mut inner = None;
         loop {
             match decoder_rx.try_recv() {
-                Ok(command) => match command {
-                    DecoderCommand::Open(path) => {
-                        if let Ok(input_ctx) = input(&path) {
-                            if let Some(video_stream) = input_ctx.streams().best(media::Type::Video)
-                                && let Ok(decoder_ctx) =
-                                    ffmpeg::codec::context::Context::from_parameters(
-                                        video_stream.parameters(),
-                                    )
-                                && let Ok(decoder) = decoder_ctx.decoder().video()
-                            {
-                                let mut decode_options =
-                                    decode_options.clone().unwrap_or(MDecodeOptions::default());
-                                decode_options.aspect_ratio = decoder.aspect_ratio();
-                                if let Ok(scaling_ctx) = software::scaling::Context::get(
-                                    decoder.format(),
-                                    decoder.width(),
-                                    decoder.height(),
-                                    format::Pixel::RGB24,
-                                    decode_options.output_w,
-                                    (decode_options.output_h
-                                        * decode_options.aspect_ratio.1 as u32)
-                                        / decode_options.aspect_ratio.0 as u32,
-                                    decode_options.scaling_flag,
-                                ) {
-                                    let stream_index = video_stream.index().clone();
+                Ok(command) => {
+                    if let Some(command) = command {
+                        match command {
+                            DecoderCommand::Open(path) => {
+                                let _ = inner.insert(
+                                    get_decoder(path, decode_options.clone())
+                                        .expect("The decoder can't be initialized"),
+                                );
 
-                                    inner.insert(MDecodeInner {
-                                        input_ctx,
-                                        scaling_ctx,
-                                        decoder,
-                                        options: decode_options,
-                                        current_video_stream_index: stream_index,
-                                    });
-
-                                    let mut frame_buffer = frame::video::Video::empty();
-                                    if let Some(mut m_decode) = inner {
+                                let mut frame_buffer = frame::video::Video::empty();
+                                loop {
+                                    if let Ok(command) = decoder_rx.try_recv() {
+                                        match command {
+                                            Some(DecoderCommand::Open(path)) => {
+                                                let _ = inner
+                                                    .insert(get_decoder(path, None).expect(
+                                                    "The decoding context can't be initialized.",
+                                                ));
+                                                to_take = 0;
+                                            }
+                                            Some(DecoderCommand::Goto(_)) => todo!(),
+                                            Some(DecoderCommand::Option(mdecode_options)) => {
+                                                // Find the differences and process as necessary
+                                            }
+                                            Some(DecoderCommand::Take) => {
+                                                to_take -= 1;
+                                            }
+                                            Some(DecoderCommand::Clean) => {}
+                                            None => todo!(),
+                                        }
+                                    }
+                                    if let RangeCheck::Higher = decode_options
+                                        .clone()
+                                        .unwrap()
+                                        .look_range
+                                        .range_check_inclusive(to_take)
+                                    {
+                                        continue;
+                                    }
+                                    if let Some(ref mut m_decode) = inner {
                                         while !m_decode
                                             .decoder
                                             .receive_frame(&mut frame_buffer)
@@ -139,7 +146,7 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                                     }
                                                 }
                                             } else {
-                                                decoder_tx.send(None);
+                                                let _ = decoder_tx.send(None);
                                             }
                                         }
                                         let mut output_buffer = frame::video::Video::empty();
@@ -147,27 +154,72 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                             .scaling_ctx
                                             .run(&frame_buffer, &mut output_buffer)
                                         {
-                                            decoder_tx.send(None);
+                                            let _ = decoder_tx.send(None);
                                         }
-
-                                        decoder_tx.send(Some(MDecodeFrame {
+                                        if let Ok(_) = decoder_tx.send(Some(MDecodeFrame {
                                             frame: output_buffer,
-                                        }));
+                                        })) {
+                                            to_take += 1;
+                                        }
                                     }
                                 }
                             }
+                            DecoderCommand::Goto(_) => todo!(),
+                            DecoderCommand::Option(mdecode_options) => todo!(),
+                            DecoderCommand::Take => panic!(),
+                            DecoderCommand::Clean => todo!(),
                         }
                     }
-                    DecoderCommand::Goto(_) => todo!(),
-                    DecoderCommand::Option(decode_options) => todo!(),
-                    DecoderCommand::Take => todo!(),
-                    DecoderCommand::Clean => todo!(),
-                },
-                _ => {}
+                }
+                Err(_) => todo!(),
             }
         }
     });
-    todo!();
+    MDecode {
+        decoder_stats: MDecoderStats {
+            time_to_frame: -1.0,
+        },
+        decoder_output: context_rx,
+        decoder_commander: context_tx,
+        is_active: true,
+        thread_reference: decoder_thread,
+    }
+}
+
+pub fn get_decoder(
+    path: String,
+    decode_options: Option<MDecodeOptions>,
+) -> Result<MDecodeInner, MDecodeError> {
+    if let Ok(input_ctx) = input(&path) {
+        if let Some(video_stream) = input_ctx.streams().best(media::Type::Video)
+            && let Ok(decoder_ctx) =
+                ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
+            && let Ok(decoder) = decoder_ctx.decoder().video()
+        {
+            let mut decode_options = decode_options.clone().unwrap_or(MDecodeOptions::default());
+            decode_options.aspect_ratio = decoder.aspect_ratio();
+            if let Ok(scaling_ctx) = software::scaling::Context::get(
+                decoder.format(),
+                decoder.width(),
+                decoder.height(),
+                format::Pixel::RGB24,
+                decode_options.output_w,
+                (decode_options.output_h * decode_options.aspect_ratio.1 as u32)
+                    / decode_options.aspect_ratio.0 as u32,
+                decode_options.scaling_flag,
+            ) {
+                let stream_index = video_stream.index().clone();
+                return Ok(MDecodeInner {
+                    input_ctx,
+                    scaling_ctx,
+                    decoder,
+                    options: decode_options,
+                    current_video_stream_index: stream_index,
+                });
+            }
+        }
+    }
+    return Err(MDecodeError::ContextCantBeInitialized);
 }
 
 impl MDecode {
@@ -193,18 +245,18 @@ impl MDecode {
                     decode_options.scaling_flag,
                 ) {
                     let stream_index = video_stream.index().clone();
-                    return Ok(MDecode {
-                        input_ctx,
-                        scaling_ctx,
-                        decoder,
-                        options: decode_options,
-                        video_stream_index: stream_index,
-                        decoder_stats: MDecoderStats {
-                            time_to_frame: -1.0,
-                        },
-                        frame_buffer: Arc::new(Mutex::new(vec_deque::VecDeque::new())),
-                        is_active: false,
-                    });
+                    todo!();
+                    // return Ok(MDecode {
+                    //     input_ctx,
+                    //     scaling_ctx,
+                    //     decoder,
+                    //     options: decode_options,
+                    //     video_stream_index: stream_index,
+                    //     decoder_stats: MDecoderStats {
+                    //         time_to_frame: -1.0,
+                    //     },
+                    //     is_active: false,
+                    // });
                 } else {
                     return Err(MDecodeError::ContextCantBeInitialized);
                 }
@@ -221,6 +273,7 @@ impl MDecode {
     // }
 }
 
+#[derive(Debug)]
 pub enum MDecodeError {
     FileNotFound,
     VideoStreamNotFound,

@@ -1,6 +1,6 @@
 #![feature(integer_sign_cast)]
 [package]
-name = "learning_ffmpeg"
+name = "mplayer"
 version = "0.1.0"
 edition = "2024"
 

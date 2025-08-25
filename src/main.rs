@@ -14,8 +14,9 @@ mod utils;
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
     let player_thread = thread::spawn(move || {
-        if let Ok(mut player) = MPlayer::setup() {
-            loop {
+        let player = MPlayer::setup();
+        match player {
+            Ok(mut player) => loop {
                 if player.should_exit {
                     exit(0);
                 }
@@ -30,9 +31,10 @@ fn main() {
                     }
                     player.tick(cli_command);
                 }
-            }
-        } else {
-            println!("Player initialization failed");
+            },
+            Err(err) => {
+                println!("{:?}", err);
+            },
         }
     });
 
