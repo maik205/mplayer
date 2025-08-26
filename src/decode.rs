@@ -2,7 +2,6 @@ use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
-use ffmpeg_next::codec::context;
 use ffmpeg_next::{self as ffmpeg, Rational, format};
 use ffmpeg_next::{
     format::input,
@@ -10,7 +9,6 @@ use ffmpeg_next::{
     software::{self},
     util::frame,
 };
-use sdl3::libc::TIOCM_CTS;
 
 use crate::utils::{Range, RangeCheck};
 
@@ -70,7 +68,7 @@ impl Iterator for &mut MDecode {
     }
 }
 
-enum DecoderCommand {
+pub enum DecoderCommand {
     Open(String),
     Goto(u32),
     Option(MDecodeOptions),
@@ -116,7 +114,9 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                                 to_take -= 1;
                                             }
                                             Some(DecoderCommand::Clean) => {}
-                                            None => todo!(),
+                                            None => {
+                                                std::process::exit(1);
+                                            },
                                         }
                                     }
                                     if let RangeCheck::Higher = decode_options
@@ -170,8 +170,11 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                             DecoderCommand::Clean => todo!(),
                         }
                     }
+                    else {
+                        return;
+                    }
                 }
-                Err(_) => todo!(),
+                Err(_) => {},
             }
         }
     });
@@ -224,48 +227,12 @@ pub fn get_decoder(
 
 impl MDecode {
     pub fn open_video(
+        &mut self,
         path: &str,
         decode_options: Option<MDecodeOptions>,
-    ) -> Result<MDecode, MDecodeError> {
-        if let Ok(input_ctx) = input(path) {
-            if let Some(video_stream) = input_ctx.streams().best(media::Type::Video)
-                && let Ok(decoder_ctx) =
-                    ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
-                && let Ok(decoder) = decoder_ctx.decoder().video()
-            {
-                let decode_options = decode_options.unwrap_or(MDecodeOptions::default());
-
-                if let Ok(scaling_ctx) = software::scaling::Context::get(
-                    decoder.format(),
-                    decoder.width(),
-                    decoder.height(),
-                    format::Pixel::RGB24,
-                    decode_options.output_w,
-                    decode_options.output_h,
-                    decode_options.scaling_flag,
-                ) {
-                    let stream_index = video_stream.index().clone();
-                    todo!();
-                    // return Ok(MDecode {
-                    //     input_ctx,
-                    //     scaling_ctx,
-                    //     decoder,
-                    //     options: decode_options,
-                    //     video_stream_index: stream_index,
-                    //     decoder_stats: MDecoderStats {
-                    //         time_to_frame: -1.0,
-                    //     },
-                    //     is_active: false,
-                    // });
-                } else {
-                    return Err(MDecodeError::ContextCantBeInitialized);
-                }
-            } else {
-                return Err(MDecodeError::VideoStreamNotFound);
-            }
-        } else {
-            return Err(MDecodeError::FileNotFound);
-        }
+    ) -> Result<(), MDecodeError> {
+        self.decoder_commander.send(Some(DecoderCommand::Open(path.to_owned()))).unwrap();
+        Ok(())
     }
 
     // pub fn feed_audio(&mut self, frame: frame::audio::Audio) {

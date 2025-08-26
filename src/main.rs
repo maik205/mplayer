@@ -1,6 +1,5 @@
 use std::{
     io::{self, BufRead},
-    process::exit,
     sync::mpsc,
     thread,
 };
@@ -13,56 +12,64 @@ mod utils;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
-    let player_thread = thread::spawn(move || {
-        let player = MPlayer::setup();
-        match player {
-            Ok(mut player) => loop {
-                if player.should_exit {
-                    exit(0);
-                }
-                if player.decoder.is_none() {
-                    if let Ok(command) = rx.recv() {
-                        player.tick(Some(command));
-                    }
-                } else {
-                    let mut cli_command = None;
-                    if let Ok(command) = rx.try_recv() {
-                        cli_command = Some(command);
-                    }
-                    player.tick(cli_command);
-                }
-            },
-            Err(err) => {
-                println!("{:?}", err);
-            },
-        }
-    });
 
-    'command: loop {
+    // Commander thread: handles user input and sends commands
+    let commander_thread = thread::spawn(move || {
         let stdin = io::stdin();
         for line in stdin.lock().lines() {
             if let Ok(line) = line {
-                match line {
-                    val if val == "exit".to_string() => {
-                        if let Ok(_) = tx.send(Command::Shutdown) {
-                            println!("shutting down mplayer");
-                            if let Ok(_) = player_thread.join() {}
-                        }
-                        break 'command;
+                match line.as_str() {
+                    "exit" => {
+                        let _ = tx.send(Command::Shutdown);
+                        println!("shutting down mplayer");
+                        break;
                     }
-                    val if val.contains("open") => {
-                        if let Some(dir) = val.split("open").nth(1) {
-                            let _ =
-                                tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
+                    _ if line.contains("open") => {
+                        if let Some(dir) = line.split("open").nth(1) {
+                            let _ = tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
                         }
                     }
                     _ => {}
                 }
             }
         }
+    });
+
+    // Player runs in main thread
+    let player = MPlayer::setup();
+    match player {
+        Ok(mut player) => loop {
+            if player.should_exit {
+                break;
+            }
+            if player.decoder.is_none() {
+                if let Ok(command) = rx.recv() {
+                    player.tick(Some(command.clone()));
+                    if let Command::Shutdown = command {
+                        break;
+                    }
+                }
+            } else {
+                let mut cli_command = None;
+                if let Ok(command) = rx.try_recv() {
+                    cli_command = Some(command.clone());
+                    if let Command::Shutdown = command {
+                        break;
+                    }
+                }
+                player.tick(cli_command);
+            }
+        },
+        Err(err) => {
+            println!("{:?}", err);
+        },
     }
+
+    // Wait for commander thread to finish
+    let _ = commander_thread.join();
 }
 
+#[derive(Clone)]
 enum Command {
     Shutdown,
     Play(String),

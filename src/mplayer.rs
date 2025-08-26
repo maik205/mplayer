@@ -1,20 +1,18 @@
 use std::time::Instant;
 
-use ffmpeg_next::{Rational, software::scaling::Flags};
 use sdl3::{
     EventPump, Sdl, VideoSubsystem,
     event::Event,
-    pixels::{Color, PixelFormat, PixelFormatEnum},
-    render::{Canvas, FRect, Texture},
+    pixels::{Color, PixelFormatEnum},
+    render::{Canvas, Texture},
     video::Window,
 };
-use sdl3_sys::pixels::SDL_PixelFormat;
 
 use crate::{
     Command,
-    decode::{MDecodeError, MDecodeOptions},
+    decode::init,
 };
-use crate::{decode::MDecode, utils::Range};
+use crate::decode::MDecode;
 
 pub struct MPlayer {
     _sdl_video: VideoSubsystem,
@@ -41,67 +39,77 @@ impl MPlayer {
             println!("[DEBUG] Context Initialization Ok");
 
             let sdl_video_res = sdl_ctx.video();
-            if let Ok(sdl_video) = sdl_video_res {
-                println!("[DEBUG] Video subsystem initialized");
+            match sdl_video_res {
+                Ok(sdl_video) => {
+                    println!("[DEBUG] Video subsystem initialized");
 
-                let window_res = sdl3::video::WindowBuilder::new(
-                    &sdl_video,
-                    "MPlayer",
-                    WINDOW_WIDTH,
-                    WINDOW_HEIGHT,
-                )
-                .build();
+                    let window_res = sdl3::video::WindowBuilder::new(
+                        &sdl_video,
+                        "MPlayer",
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                    )
+                    .build();
 
-                if let Ok(window) = window_res {
-                    println!("[DEBUG] Window created");
+                    match window_res {
+                        Ok(window) => {
+                            println!("[DEBUG] Window created");
 
-                    let event_pump_res = sdl_ctx.event_pump();
-                    if let Ok(sdl_event_pump) = event_pump_res {
-                        println!("[DEBUG] Event pump created");
+                            let event_pump_res = sdl_ctx.event_pump();
+                            match event_pump_res {
+                                Ok(sdl_event_pump) => {
+                                    println!("[DEBUG] Event pump created");
 
-                        let mut canvas = window.into_canvas();
-                        canvas.set_draw_color(Color::RGB(100, 2, 0));
+                                    let mut canvas = window.into_canvas();
+                                    canvas.set_draw_color(Color::RGB(100, 2, 0));
 
-                        let texture_creator = canvas.texture_creator();
+                                    let texture_creator = canvas.texture_creator();
 
-                        let texture_res = texture_creator.create_texture(
-                            Some(PixelFormatEnum::RGB24.into()),
-                            sdl3::render::TextureAccess::Streaming,
-                            WINDOW_WIDTH,
-                            WINDOW_HEIGHT,
-                        );
+                                    let texture_res = texture_creator.create_texture(
+                                        Some(PixelFormatEnum::RGB24.into()),
+                                        sdl3::render::TextureAccess::Streaming,
+                                        WINDOW_WIDTH,
+                                        WINDOW_HEIGHT,
+                                    );
 
-                        if let Ok(video_texture) = texture_res {
-                            println!("[DEBUG] Video texture created");
-                            return Ok(MPlayer {
-                                _sdl_video: sdl_video,
-                                _sdl_context: sdl_ctx,
-                                sdl_event_pump,
-                                _initialized_at: Instant::now(),
-                                should_exit: false,
-                                decoder: None,
-                                canvas,
-                                video_texture,
-                                player_stats: MPlayerStats {
-                                    time_to_present: -1.0,
-                                },
-                            });
-                        } else {
-                            println!("[ERROR] Failed to create video texture");
+                                    match texture_res {
+                                        Ok(video_texture) => {
+                                            println!("[DEBUG] Video texture created");
+                                            return Ok(MPlayer {
+                                                _sdl_video: sdl_video,
+                                                _sdl_context: sdl_ctx,
+                                                sdl_event_pump,
+                                                _initialized_at: Instant::now(),
+                                                should_exit: false,
+                                                decoder: Some(init(None)),
+                                                canvas,
+                                                video_texture,
+                                                player_stats: MPlayerStats {
+                                                    time_to_present: -1.0,
+                                                },
+                                            });
+                                        }
+                                        Err(e) => {
+                                            println!("[ERROR] Failed to create video texture: {e}");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("[ERROR] Failed to create event pump: {e}");
+                                }
+                            }
                         }
-                    } else {
-                        println!("[ERROR] Failed to create event pump");
+                        Err(e) => {
+                            println!("[ERROR] Failed to create window: {e}");
+                        }
                     }
-                } else {
-                    println!("[ERROR] Failed to create window");
                 }
-            } else {
-                println!("[ERROR] Failed to initialize video subsystem");
+                Err(e) => {
+                    println!("[ERROR] Failed to initialize video subsystem: {e}");
+                }
             }
-        } else {
-            if let Err(msg) = init_res {
-                println!("{}", msg);
-            }
+        } else if let Err(e) = init_res {
+            println!("[ERROR] Failed to initialize SDL context: {e}");
         }
         Err(MPlayerError::WindowCreationFailed)
     }
@@ -151,22 +159,14 @@ impl MPlayer {
         match command {
             Command::Shutdown => {
                 self.should_exit = true;
+                let _ = self.decoder.as_mut().unwrap().decoder_commander.send(None);
             }
             Command::Play(path) => {
-                if let Ok((w, h)) = self.canvas.output_size() {
-                    if let Ok(decoder) = MDecode::open_video(
-                        path.as_str(),
-                        Some(MDecodeOptions {
-                            scaling_flag: Flags::BILINEAR,
-                            output_w: w,
-                            output_h: h,
-                            look_range: Range::new(5, 15),
-                            aspect_ratio: Rational::new(w as i32, h as i32),
-                        }),
-                    ) {
-                        self.decoder = Some(decoder);
-                    }
-                }
+                self.decoder
+                    .as_mut()
+                    .unwrap()
+                    .open_video(path.as_str(), None)
+                    .unwrap();
             }
             _ => {}
         }
