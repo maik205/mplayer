@@ -8,11 +8,8 @@ use sdl3::{
     video::Window,
 };
 
-use crate::{
-    Command,
-    decode::init,
-};
 use crate::decode::MDecode;
+use crate::{Command, decode::init};
 
 pub struct MPlayer {
     _sdl_video: VideoSubsystem,
@@ -29,8 +26,8 @@ pub struct MPlayerStats {
     time_to_present: f32,
 }
 
-const WINDOW_WIDTH: u32 = 1920;
-const WINDOW_HEIGHT: u32 = 1080;
+const WINDOW_WIDTH: u32 = 1280;
+const WINDOW_HEIGHT: u32 = 720;
 
 impl MPlayer {
     pub fn setup() -> Result<Self, MPlayerError> {
@@ -75,13 +72,16 @@ impl MPlayer {
                                     match texture_res {
                                         Ok(video_texture) => {
                                             println!("[DEBUG] Video texture created");
+                                            let decoder = Some(crate::decode::init(None));
+                                            println!("[DEBUG] Decoder instantiated");
+
                                             return Ok(MPlayer {
                                                 _sdl_video: sdl_video,
                                                 _sdl_context: sdl_ctx,
                                                 sdl_event_pump,
                                                 _initialized_at: Instant::now(),
                                                 should_exit: false,
-                                                decoder: Some(init(None)),
+                                                decoder,
                                                 canvas,
                                                 video_texture,
                                                 player_stats: MPlayerStats {
@@ -120,28 +120,41 @@ impl MPlayer {
 
         // Check if there is an active decoder and obtains the frame
         if let Some(decoder) = &mut self.decoder {
-            let mut decoder = decoder;
-            if let Some(mut frame) = decoder.next() {
-                // Now we **finally** get to draw washoi!!
-                // println!(
-                //     "[DEBUG] {}s to decode frame",
-                //     decoder.decoder_stats.time_to_frame
-                // );
-                let timer = Instant::now();
-                let _ = self
-                    .video_texture
-                    .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                        let frame_data = frame.frame.data_mut(0);
-                        buffer.swap_with_slice(frame_data);
-                    });
-                self.canvas.clear();
-                self.player_stats.time_to_present = timer.elapsed().as_secs_f32();
-                let _ = self.canvas.copy(&self.video_texture, None, None);
-                self.canvas.present();
-            } else {
-                self.decoder.take();
-                self.canvas.clear();
-                self.canvas.present();
+            if decoder.is_active {
+                let mut decoder = decoder;
+                if let Some(mut frame) = decoder.next() {
+                    let timer = Instant::now();
+                    let size = (frame.frame.width(), frame.frame.height());
+                    if size != self.canvas.output_size().unwrap() {
+                        let _ = self
+                            .canvas
+                            .window_mut()
+                            .set_size(frame.frame.width(), frame.frame.height());
+                        self.video_texture = self
+                            .canvas
+                            .texture_creator()
+                            .create_texture_streaming(
+                                Some(PixelFormatEnum::RGB24.into()),
+                                size.0,
+                                size.1,
+                            )
+                            .unwrap();
+                    }
+
+                    let _ =
+                        self.video_texture
+                            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                                let frame_data = frame.frame.data_mut(0);
+                                buffer.swap_with_slice(frame_data);
+                            });
+                    self.canvas.clear();
+                    self.player_stats.time_to_present = timer.elapsed().as_secs_f32();
+                    let _ = self.canvas.copy(&self.video_texture, None, None);
+                    self.canvas.present();
+                } else {
+                    self.canvas.clear();
+                    self.canvas.present();
+                }
             }
         }
 
@@ -160,6 +173,7 @@ impl MPlayer {
             Command::Shutdown => {
                 self.should_exit = true;
                 let _ = self.decoder.as_mut().unwrap().decoder_commander.send(None);
+                std::process::exit(0);
             }
             Command::Play(path) => {
                 self.decoder

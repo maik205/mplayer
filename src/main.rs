@@ -1,7 +1,5 @@
 use std::{
-    io::{self, BufRead},
-    sync::mpsc,
-    thread,
+    io::{self, BufRead}, process::exit, sync::mpsc, thread
 };
 
 use crate::mplayer::MPlayer;
@@ -26,7 +24,8 @@ fn main() {
                     }
                     _ if line.contains("open") => {
                         if let Some(dir) = line.split("open").nth(1) {
-                            let _ = tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
+                            let _ =
+                                tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
                         }
                     }
                     _ => {}
@@ -40,29 +39,20 @@ fn main() {
     match player {
         Ok(mut player) => loop {
             if player.should_exit {
-                break;
+                exit(0);
             }
-            if player.decoder.is_none() {
-                if let Ok(command) = rx.recv() {
-                    player.tick(Some(command.clone()));
-                    if let Command::Shutdown = command {
-                        break;
-                    }
+            let mut cli_command = None;
+            if let Ok(command) = rx.try_recv() {
+                cli_command = Some(command.clone());
+                if let Command::Shutdown = command {
+                    break;
                 }
-            } else {
-                let mut cli_command = None;
-                if let Ok(command) = rx.try_recv() {
-                    cli_command = Some(command.clone());
-                    if let Command::Shutdown = command {
-                        break;
-                    }
-                }
-                player.tick(cli_command);
             }
+            player.tick(cli_command);
         },
         Err(err) => {
             println!("{:?}", err);
-        },
+        }
     }
 
     // Wait for commander thread to finish

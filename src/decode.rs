@@ -97,6 +97,7 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
 
                                 let mut frame_buffer = frame::video::Video::empty();
                                 loop {
+                                    println!("[DEBUG] DECODER LOOP");
                                     if let Ok(command) = decoder_rx.try_recv() {
                                         match command {
                                             Some(DecoderCommand::Open(path)) => {
@@ -121,7 +122,7 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                     }
                                     if let RangeCheck::Higher = decode_options
                                         .clone()
-                                        .unwrap()
+                                        .unwrap_or_default()
                                         .look_range
                                         .range_check_inclusive(to_take)
                                     {
@@ -178,13 +179,14 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
             }
         }
     });
+    println!("[DEBUG] Decoder thread spawned");
     MDecode {
         decoder_stats: MDecoderStats {
             time_to_frame: -1.0,
         },
         decoder_output: context_rx,
         decoder_commander: context_tx,
-        is_active: true,
+        is_active: false,
         thread_reference: decoder_thread,
     }
 }
@@ -232,6 +234,7 @@ impl MDecode {
         decode_options: Option<MDecodeOptions>,
     ) -> Result<(), MDecodeError> {
         self.decoder_commander.send(Some(DecoderCommand::Open(path.to_owned()))).unwrap();
+        self.is_active = true;
         Ok(())
     }
 
