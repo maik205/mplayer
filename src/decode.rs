@@ -97,7 +97,6 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
 
                                 let mut frame_buffer = frame::video::Video::empty();
                                 loop {
-                                    println!("[DEBUG] DECODER LOOP");
                                     if let Ok(command) = decoder_rx.try_recv() {
                                         match command {
                                             Some(DecoderCommand::Open(path)) => {
@@ -126,6 +125,7 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                         .look_range
                                         .range_check_inclusive(to_take)
                                     {
+                                        // println!("[DEBUG] Decoder's buffer exceeded, skipping");
                                         continue;
                                     }
                                     if let Some(ref mut m_decode) = inner {
