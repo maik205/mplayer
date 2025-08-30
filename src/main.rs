@@ -1,5 +1,8 @@
 use std::{
-    io::{self, BufRead}, process::exit, sync::mpsc, thread
+    io::{self, BufRead},
+    process::exit,
+    sync::mpsc,
+    thread,
 };
 
 use crate::mplayer::MPlayer;
@@ -60,7 +63,7 @@ fn main() {
 }
 
 #[derive(Clone)]
-enum Command {
+pub enum Command {
     Shutdown,
     Play(String),
     Pause,

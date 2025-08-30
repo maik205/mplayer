@@ -1,5 +1,10 @@
-use std::time::Instant;
+use std::{
+    collections::VecDeque,
+    thread,
+    time::{Duration, Instant},
+};
 
+use ffmpeg_next::{frame::Video, media};
 use sdl3::{
     EventPump, Sdl, VideoSubsystem,
     event::Event,
@@ -8,8 +13,14 @@ use sdl3::{
     video::Window,
 };
 
-use crate::decode::MDecode;
-use crate::{Command, decode::init};
+use crate::{
+    Command,
+    decode::{MDecodeFrame, init},
+};
+use crate::{
+    decode::{MDecode, MediaInfo},
+    utils::frame_time_ms,
+};
 
 pub struct MPlayer {
     _sdl_video: VideoSubsystem,
@@ -21,7 +32,12 @@ pub struct MPlayer {
     canvas: Canvas<Window>,
     video_texture: Texture,
     player_stats: MPlayerStats,
+    we_are_at: u64,
+    i_displayed_at: Instant,
+    media_info: Option<MediaInfo>,
+    to_display: VecDeque<MDecodeFrame>,
 }
+
 pub struct MPlayerStats {
     time_to_present: f32,
 }
@@ -62,9 +78,8 @@ impl MPlayer {
 
                                     let texture_creator = canvas.texture_creator();
 
-                                    let texture_res = texture_creator.create_texture(
+                                    let texture_res = texture_creator.create_texture_streaming(
                                         Some(PixelFormatEnum::RGB24.into()),
-                                        sdl3::render::TextureAccess::Streaming,
                                         WINDOW_WIDTH,
                                         WINDOW_HEIGHT,
                                     );
@@ -87,6 +102,10 @@ impl MPlayer {
                                                 player_stats: MPlayerStats {
                                                     time_to_present: -1.0,
                                                 },
+                                                we_are_at: 0,
+                                                i_displayed_at: Instant::now(),
+                                                media_info: None,
+                                                to_display: VecDeque::new(),
                                             });
                                         }
                                         Err(e) => {
@@ -122,38 +141,62 @@ impl MPlayer {
         if let Some(decoder) = &mut self.decoder {
             if decoder.is_active {
                 let mut decoder = decoder;
-                if let Some(mut frame) = decoder.next() {
-                    let timer = Instant::now();
-                    let size = (frame.frame.width(), frame.frame.height());
-                    if size != self.canvas.output_size().unwrap() {
-                        let _ = self
-                            .canvas
-                            .window_mut()
-                            .set_size(frame.frame.width(), frame.frame.height());
-                        self.video_texture = self
-                            .canvas
-                            .texture_creator()
-                            .create_texture_streaming(
-                                Some(PixelFormatEnum::RGB24.into()),
-                                size.0,
-                                size.1,
-                            )
-                            .unwrap();
-                    }
 
-                    let _ =
-                        self.video_texture
-                            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                if self.to_display.len() < 5 {
+                    if let Some(decoder_output) = decoder.next() {
+                        match decoder_output {
+                            crate::decode::DecoderOutput::Frame(frame) => {
+                                self.to_display.push_back(frame);
+                            }
+                            crate::decode::DecoderOutput::MediaInfo(media_info) => {
+                                let _ = self.media_info.insert(media_info);
+                            }
+                            crate::decode::DecoderOutput::Status(mdecoder_stats) => {
+                                println!("{:?}", mdecoder_stats)
+                            }
+                        }
+                    } else {
+                        self.canvas.clear();
+                        self.canvas.present();
+                    }
+                }
+
+                if let Some(media_info) = self.media_info
+                    && self.i_displayed_at.elapsed().as_millis() as u64
+                        >= frame_time_ms(media_info.video_rate)
+                {
+                    if let Some(ref mut frame) = self.to_display.pop_front() {
+                        let size = (frame.frame.width(), frame.frame.height());
+                        if size != self.canvas.output_size().unwrap() {
+                            let _ = self
+                                .canvas
+                                .window_mut()
+                                .set_size(frame.frame.width(), frame.frame.height());
+                            self.video_texture = self
+                                .canvas
+                                .texture_creator()
+                                .create_texture_streaming(
+                                    Some(PixelFormatEnum::RGB24.into()),
+                                    size.0,
+                                    size.1,
+                                )
+                                .unwrap();
+                        }
+
+                        let _ = self.video_texture.with_lock(
+                            None,
+                            |buffer: &mut [u8], _pitch: usize| {
                                 let frame_data = frame.frame.data_mut(0);
                                 buffer.swap_with_slice(frame_data);
-                            });
-                    self.canvas.clear();
-                    self.player_stats.time_to_present = timer.elapsed().as_secs_f32();
-                    let _ = self.canvas.copy(&self.video_texture, None, None);
-                    self.canvas.present();
-                } else {
-                    self.canvas.clear();
-                    self.canvas.present();
+                            },
+                        );
+
+                        self.canvas.clear();
+                        let _ = self.canvas.copy(&self.video_texture, None, None);
+                        self.canvas.present();
+
+                        self.i_displayed_at = Instant::now();
+                    }
                 }
             }
         }
@@ -179,8 +222,9 @@ impl MPlayer {
                 self.decoder
                     .as_mut()
                     .unwrap()
-                    .open_video(path.as_str(), None)
+                    .open_video(path, None)
                     .unwrap();
+                self.decoder.as_mut().unwrap().is_active = true;
             }
             _ => {}
         }
