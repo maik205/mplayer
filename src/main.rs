@@ -7,9 +7,11 @@ use std::{
 
 use crate::mplayer::MPlayer;
 
+mod audio;
 mod decode;
 mod mplayer;
 mod utils;
+mod constants;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
@@ -27,8 +29,9 @@ fn main() {
                     }
                     _ if line.contains("open") => {
                         if let Some(dir) = line.split("open").nth(1) {
-                            let _ =
-                                tx.send(Command::Play(String::from(dir.replace("\"", "").trim())));
+                            let _ = tx.send(Command::Play(String::from(
+                                dir.replace("\"", "").replace("'", "").trim(),
+                            )));
                         }
                     }
                     _ => {}

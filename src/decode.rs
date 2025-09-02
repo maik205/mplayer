@@ -3,6 +3,9 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use ffmpeg_next::codec::{Context, audio};
+use ffmpeg_next::format::{Pixel, Sample};
+use ffmpeg_next::frame::Audio;
 use ffmpeg_next::{self as ffmpeg, Rational, Stream, format};
 use ffmpeg_next::{
     format::input,
@@ -10,8 +13,13 @@ use ffmpeg_next::{
     software::{self},
     util::frame,
 };
+use sdl3::Sdl;
+use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec};
+use sdl3::pixels::PixelFormatEnum;
 
-use crate::utils::{Range, RangeCheck, print_context_data};
+use crate::audio::{MPlayerAudio, init_audio_subsystem};
+use crate::constants::ConvFormat;
+use crate::utils::{Range, RangeCheck, frame_time_ms, frame_time_ns, print_context_data};
 
 #[derive(Debug, Clone)]
 pub struct MDecodeOptions {
@@ -27,15 +35,18 @@ pub struct MDecode {
     pub decoder_commander: Sender<Option<DecoderCommand>>,
     pub is_active: bool,
     pub thread_reference: JoinHandle<()>,
+    pub audio: MPlayerAudio,
 }
 
 pub struct MDecodeInner {
     pub input_ctx: ffmpeg::format::context::Input,
     pub scaling_ctx: ffmpeg::software::scaling::Context,
-    pub decoder: ffmpeg_next::codec::decoder::video::Video,
+    pub video_decoder: ffmpeg_next::codec::decoder::video::Video,
+    pub audio_decoder: ffmpeg::codec::decoder::audio::Audio,
     pub current_video_stream_index: usize,
     pub options: MDecodeOptions,
-    pub media_info: MediaInfo, // pub current_audio_stream_index: usize,
+    pub media_info: MediaInfo,
+    pub current_audio_stream_index: usize,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct MediaInfo {
@@ -43,21 +54,23 @@ pub struct MediaInfo {
     pub v_height: u32,
     pub video_rate: Rational,
     pub aspect_ratio: Rational,
+    pub frame_time_ns: i32,
+    pub frame_time_ms: i32,
+    pub audio_spec: AudioSpec,
 }
 
 impl Default for MDecodeOptions {
     fn default() -> Self {
         Self {
             scaling_flag: software::scaling::Flags::BILINEAR,
-            look_range: Range::new(5, 20),
-            window_default_size: (1920, 1080),
+            look_range: Range::new(2, 5),
+            window_default_size: (1152, 648),
         }
     }
 }
 
-pub struct MDecodeFrame {
-    pub frame: frame::video::Video,
-    pub cur_stats: MDecoderStats,
+pub struct MDecodeVideoFrame {
+    pub video_frame: frame::video::Video,
 }
 // The iterator ends when the video is over;
 impl Iterator for &mut MDecode {
@@ -65,12 +78,16 @@ impl Iterator for &mut MDecode {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Ok(frame) = self.decoder_output.recv() {
-            let _ = self.decoder_commander.send(Some(DecoderCommand::Take));
-
+            if let Some(_) = frame {
+                let _ = self.decoder_commander.send(Some(DecoderCommand::Take));
+            }
             return frame;
         }
         return None;
     }
+}
+pub struct MDecodeAudioFrame {
+    pub audio_frame: frame::audio::Audio,
 }
 
 pub enum DecoderCommand {
@@ -82,19 +99,26 @@ pub enum DecoderCommand {
 }
 
 pub enum DecoderOutput {
-    Frame(MDecodeFrame),
+    Video(MDecodeVideoFrame),
+    Audio(MDecodeAudioFrame),
     MediaInfo(MediaInfo),
-    Status(MDecoderStats),
 }
 
-pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
+pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
     let (decoder_tx, context_rx) = mpsc::channel::<Option<DecoderOutput>>();
     let (context_tx, decoder_rx) = mpsc::channel::<Option<DecoderCommand>>();
-
+    let audio_spec = AudioSpec {
+        freq: Some(44100),
+        channels: Some(2),
+        format: Some(AudioFormat::F32LE),
+    };
+    let audio = init_audio_subsystem(sdl, &audio_spec).unwrap();
+    let audio_tx_inner = audio.tx.clone();
     let decoder_thread = thread::spawn(move || {
         let decoder_tx = decoder_tx;
         let decoder_rx = decoder_rx;
-        let mut to_take = 0;
+        let audio_tx_inner = audio_tx_inner;
+        let mut to_take = 2;
         let mut inner = None;
         loop {
             match decoder_rx.try_recv() {
@@ -112,7 +136,8 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                 // Put the decoder in the container!
                                 let _ = inner.insert(decode_inner);
 
-                                let mut frame_buffer = frame::video::Video::empty();
+                                let mut video_frame_buffer = frame::video::Video::empty();
+                                let mut audio_frame_buffer = frame::audio::Audio::empty();
                                 // Decode the stream frame by frame (thank you ffmpeg, you're magical)
                                 loop {
                                     if let Ok(command) = decoder_rx.try_recv() {
@@ -147,45 +172,64 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                                         // thread::sleep(Duration::from_millis(16));
                                         continue;
                                     }
-                                    if let Some(ref mut m_decode) = inner {
+                                    if let Some(ref mut inner) = inner {
+                                        // For benchmarking purposes.
                                         let timer = Instant::now();
-                                        while !m_decode
-                                            .decoder
-                                            .receive_frame(&mut frame_buffer)
-                                            .is_ok()
+
+                                        // The frequency of audio frames is MUCH higher compared to video frames, doing this is lethally slow for the audio decoder.
+                                        // Sending it over the same channel as the video would also create contention between audio and video ? right? lets test it out before microoptimizing to death
+                                        while let Ok(()) = inner
+                                            .audio_decoder
+                                            .receive_frame(&mut audio_frame_buffer)
                                         {
-                                            if let Some((stream, packet)) =
-                                                m_decode.input_ctx.packets().next()
+                                            audio_tx_inner
+                                                .send(Some(audio_frame_buffer.clone()))
+                                                .unwrap();
+                                        }
+
+                                        if let Ok(()) = inner
+                                            .video_decoder
+                                            .receive_frame(&mut video_frame_buffer)
+                                        {
+                                            let mut video_frame = frame::video::Video::empty();
+                                            if let Err(_) = inner
+                                                .scaling_ctx
+                                                .run(&video_frame_buffer, &mut video_frame)
                                             {
-                                                if m_decode.current_video_stream_index
-                                                    == stream.index()
-                                                {
-                                                    if let Ok(_) =
-                                                        m_decode.decoder.send_packet(&packet)
-                                                    {
-                                                        continue;
-                                                    }
-                                                }
-                                            } else {
                                                 let _ = decoder_tx.send(None);
                                             }
+                                            if let Ok(_) =
+                                                decoder_tx.send(Some(DecoderOutput::Video(
+                                                    MDecodeVideoFrame { video_frame },
+                                                )))
+                                            {
+                                                to_take += 1;
+                                            }
                                         }
-                                        let mut output_buffer = frame::video::Video::empty();
-                                        if let Err(_) = m_decode
-                                            .scaling_ctx
-                                            .run(&frame_buffer, &mut output_buffer)
+
+                                        if let Some((stream, packet)) =
+                                            inner.input_ctx.packets().next()
                                         {
+                                            match stream.index() {
+                                                stream_indx
+                                                    if stream_indx
+                                                        == inner.current_audio_stream_index =>
+                                                {
+                                                    let _ =
+                                                        inner.audio_decoder.send_packet(&packet);
+                                                }
+                                                stream_indx
+                                                    if stream_indx
+                                                        == inner.current_video_stream_index =>
+                                                {
+                                                    let _ =
+                                                        inner.video_decoder.send_packet(&packet);
+                                                }
+                                                _ => {}
+                                            }
+                                        } else {
                                             let _ = decoder_tx.send(None);
-                                        }
-                                        if let Ok(_) = decoder_tx.send(Some(DecoderOutput::Frame(
-                                            MDecodeFrame {
-                                                frame: output_buffer,
-                                                cur_stats: MDecoderStats {
-                                                    decode_latency: timer.elapsed().as_secs_f32(),
-                                                },
-                                            },
-                                        ))) {
-                                            to_take += 1;
+                                            
                                         }
                                     }
                                 }
@@ -193,7 +237,9 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
                             DecoderCommand::Goto(_) => todo!(),
                             DecoderCommand::Option(mdecode_options) => todo!(),
                             DecoderCommand::Take => panic!(),
-                            DecoderCommand::Clean => todo!(),
+                            DecoderCommand::Clean => {
+                                to_take = 0;
+                            }
                         }
                     } else {
                         return;
@@ -212,6 +258,7 @@ pub fn init(decode_options: Option<MDecodeOptions>) -> MDecode {
         decoder_commander: context_tx,
         is_active: false,
         thread_reference: decoder_thread,
+        audio,
     }
 }
 
@@ -228,42 +275,52 @@ pub fn get_decoder(
     if let Ok(input_ctx) = input(&path) {
         let _ = print_context_data(&input_ctx);
 
+        // ily ffmpeg!
         if let Some(video_stream) = input_ctx.streams().best(media::Type::Video)
-            && let Ok(decoder_ctx) =
-                ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
-            && let Ok(decoder) = decoder_ctx.decoder().video()
+            && let Some(audio_stream) = input_ctx.streams().best(media::Type::Audio)
+            && let Ok(decoder_ctx) = Context::from_parameters(video_stream.parameters())
+            && let Ok(a_decoder_context) = Context::from_parameters(audio_stream.parameters())
+            && let Ok(video_decoder) = decoder_ctx.decoder().video()
+            && let Ok(audio_decoder) = a_decoder_context.decoder().audio()
         {
             let decode_options = decode_options.clone().unwrap_or(MDecodeOptions::default());
 
             //Extract the media's information and store it in the decoder inner information.
             let media_info = MediaInfo {
-                v_width: decoder.width(),
-                v_height: decoder.height(),
+                v_width: video_decoder.width(),
+                v_height: video_decoder.height(),
                 video_rate: video_stream.rate(),
-                aspect_ratio: decoder.aspect_ratio(),
+                aspect_ratio: video_decoder.aspect_ratio(),
+                frame_time_ms: frame_time_ms(video_stream.rate()),
+                frame_time_ns: frame_time_ns(video_stream.rate()),
+                audio_spec: AudioSpec {
+                    freq: Some((audio_decoder.rate()).clone() as i32),
+                    channels: Some(audio_decoder.channels().into()),
+                    format: Some(audio_decoder.format().convert()),
+                },
             };
 
-            let ar = Rational::new(decoder.width() as i32, decoder.height() as i32);
-            println!(
-                "{}",
-                crate::utils::height_from_ar(ar, decode_options.window_default_size.0,)
-            );
+            let ar = Rational::new(video_decoder.width() as i32, video_decoder.height() as i32);
+
             if let Ok(scaling_ctx) = software::scaling::Context::get(
-                decoder.format(),
-                decoder.width(),
-                decoder.height(),
-                format::Pixel::RGB24,
+                video_decoder.format(),
+                video_decoder.width(),
+                video_decoder.height(),
+                Pixel::RGB24,
                 decode_options.window_default_size.0,
                 crate::utils::height_from_ar(ar, decode_options.window_default_size.0),
                 decode_options.scaling_flag,
             ) {
-                let stream_index = video_stream.index().clone();
+                let video_stream_index = video_stream.index().clone();
+                let audio_stream_index = audio_stream.index().clone();
                 return Ok(MDecodeInner {
                     input_ctx,
                     scaling_ctx,
-                    decoder,
+                    video_decoder,
+                    audio_decoder,
                     options: decode_options,
-                    current_video_stream_index: stream_index,
+                    current_video_stream_index: video_stream_index,
+                    current_audio_stream_index: audio_stream_index,
                     media_info,
                 });
             }

@@ -40,7 +40,6 @@ impl Range {
     }
 }
 
-
 // Copied from https://github.com/zmwangx/rust-ffmpeg/blob/master/examples/metadata.rs
 pub fn print_context_data(context: &Input) -> Result<(), ffmpeg::Error> {
     for (k, v) in context.metadata().iter() {
@@ -127,8 +126,12 @@ pub fn width_from_ar(aspect_ratio: Rational, height: u32) -> u32 {
     return height * aspect_ratio.1 as u32 / aspect_ratio.0 as u32;
 }
 
-pub fn frame_time_ms(rate: Rational) -> u64 {
-    return (1000 * rate.1 / rate.0) as u64;
+pub fn frame_time_ms(rate: Rational) -> i32 {
+    return (1000 * rate.1 / rate.0) as i32;
+}
+
+pub fn frame_time_ns(rate: Rational) -> i32 {
+    return (1_000_000_000 as u64 * rate.1 as u64 / rate.0 as u64) as i32;
 }
 
 pub enum RangeCheck {

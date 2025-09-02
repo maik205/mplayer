@@ -7,6 +7,7 @@ use std::{
 use ffmpeg_next::{frame::Video, media};
 use sdl3::{
     EventPump, Sdl, VideoSubsystem,
+    audio::{AudioCallback, AudioFormat, AudioSpec},
     event::Event,
     pixels::{Color, PixelFormatEnum},
     render::{Canvas, Texture},
@@ -15,11 +16,12 @@ use sdl3::{
 
 use crate::{
     Command,
-    decode::{MDecodeFrame, init},
+    constants::ConvFormat,
+    decode::{DecoderCommand, MDecodeAudioFrame, MDecodeVideoFrame, init},
 };
 use crate::{
+    audio::MPlayerAudio,
     decode::{MDecode, MediaInfo},
-    utils::frame_time_ms,
 };
 
 pub struct MPlayer {
@@ -31,19 +33,20 @@ pub struct MPlayer {
     pub decoder: Option<MDecode>,
     canvas: Canvas<Window>,
     video_texture: Texture,
-    player_stats: MPlayerStats,
-    we_are_at: u64,
-    i_displayed_at: Instant,
+    // will use in future to display some player stats like yt's stats for nerds
+    _player_stats: MPlayerStats,
+    last_frame: Instant,
     media_info: Option<MediaInfo>,
-    to_display: VecDeque<MDecodeFrame>,
+    to_display: VecDeque<MDecodeVideoFrame>,
+    to_sound: VecDeque<MDecodeAudioFrame>,
 }
 
 pub struct MPlayerStats {
     time_to_present: f32,
 }
 
-const WINDOW_WIDTH: u32 = 1280;
-const WINDOW_HEIGHT: u32 = 720;
+const WINDOW_WIDTH: u32 = 100;
+const WINDOW_HEIGHT: u32 = 100;
 
 impl MPlayer {
     pub fn setup() -> Result<Self, MPlayerError> {
@@ -87,7 +90,7 @@ impl MPlayer {
                                     match texture_res {
                                         Ok(video_texture) => {
                                             println!("[DEBUG] Video texture created");
-                                            let decoder = Some(crate::decode::init(None));
+                                            let decoder = Some(crate::decode::init(None, &sdl_ctx));
                                             println!("[DEBUG] Decoder instantiated");
 
                                             return Ok(MPlayer {
@@ -99,13 +102,13 @@ impl MPlayer {
                                                 decoder,
                                                 canvas,
                                                 video_texture,
-                                                player_stats: MPlayerStats {
+                                                _player_stats: MPlayerStats {
                                                     time_to_present: -1.0,
                                                 },
-                                                we_are_at: 0,
-                                                i_displayed_at: Instant::now(),
+                                                last_frame: Instant::now(),
                                                 media_info: None,
                                                 to_display: VecDeque::new(),
+                                                to_sound: VecDeque::new(),
                                             });
                                         }
                                         Err(e) => {
@@ -142,41 +145,22 @@ impl MPlayer {
             if decoder.is_active {
                 let mut decoder = decoder;
 
-                if self.to_display.len() < 5 {
-                    if let Some(decoder_output) = decoder.next() {
-                        match decoder_output {
-                            crate::decode::DecoderOutput::Frame(frame) => {
-                                self.to_display.push_back(frame);
-                            }
-                            crate::decode::DecoderOutput::MediaInfo(media_info) => {
-                                let _ = self.media_info.insert(media_info);
-                            }
-                            crate::decode::DecoderOutput::Status(mdecoder_stats) => {
-                                println!("{:?}", mdecoder_stats)
-                            }
-                        }
-                    } else {
-                        self.canvas.clear();
-                        self.canvas.present();
-                    }
-                }
-
+                //check if enough time has passed since the image was last displayed and displays it if necessary
                 if let Some(media_info) = self.media_info
-                    && self.i_displayed_at.elapsed().as_millis() as u64
-                        >= frame_time_ms(media_info.video_rate)
+                    && self.last_frame.elapsed().as_nanos() as i32 >= media_info.frame_time_ns
                 {
                     if let Some(ref mut frame) = self.to_display.pop_front() {
-                        let size = (frame.frame.width(), frame.frame.height());
+                        let size = (frame.video_frame.width(), frame.video_frame.height());
                         if size != self.canvas.output_size().unwrap() {
                             let _ = self
                                 .canvas
                                 .window_mut()
-                                .set_size(frame.frame.width(), frame.frame.height());
+                                .set_size(frame.video_frame.width(), frame.video_frame.height());
                             self.video_texture = self
                                 .canvas
                                 .texture_creator()
                                 .create_texture_streaming(
-                                    Some(PixelFormatEnum::RGB24.into()),
+                                    Some(frame.video_frame.format().convert().into()),
                                     size.0,
                                     size.1,
                                 )
@@ -186,7 +170,7 @@ impl MPlayer {
                         let _ = self.video_texture.with_lock(
                             None,
                             |buffer: &mut [u8], _pitch: usize| {
-                                let frame_data = frame.frame.data_mut(0);
+                                let frame_data = frame.video_frame.data_mut(0);
                                 buffer.swap_with_slice(frame_data);
                             },
                         );
@@ -195,7 +179,25 @@ impl MPlayer {
                         let _ = self.canvas.copy(&self.video_texture, None, None);
                         self.canvas.present();
 
-                        self.i_displayed_at = Instant::now();
+                        self.last_frame = Instant::now();
+                    }
+                }
+
+                if self.to_display.len() < 5 {
+                    if let Some(decoder_output) = decoder.next() {
+                        match decoder_output {
+                            crate::decode::DecoderOutput::Video(frame) => {
+                                self.to_display.push_back(frame);
+                            }
+                            crate::decode::DecoderOutput::MediaInfo(media_info) => {
+                                let _ = self.media_info.insert(media_info);
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        self.canvas.clear();
+                        self.canvas.present();
+                        decoder.is_active = false;
                     }
                 }
             }
