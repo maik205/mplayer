@@ -108,7 +108,7 @@ pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
     let (decoder_tx, context_rx) = mpsc::channel::<Option<DecoderOutput>>();
     let (context_tx, decoder_rx) = mpsc::channel::<Option<DecoderCommand>>();
     let audio_spec = AudioSpec {
-        freq: Some(44100),
+        freq: Some(44100 / 2),
         channels: Some(2),
         format: Some(AudioFormat::F32LE),
     };
@@ -183,7 +183,7 @@ pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
                                             .receive_frame(&mut audio_frame_buffer)
                                         {
                                             audio_tx_inner
-                                                .send(Some(audio_frame_buffer.clone()))
+                                                .send(audio_frame_buffer.clone())
                                                 .unwrap();
                                         }
 
@@ -229,7 +229,6 @@ pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
                                             }
                                         } else {
                                             let _ = decoder_tx.send(None);
-                                            
                                         }
                                     }
                                 }
@@ -358,3 +357,8 @@ pub enum MDecodeError {
 pub struct MDecoderStats {
     pub decode_latency: f32,
 }
+
+// I think lets not implement the decoder as an iterator, thats not really suitable and makes code overly [complicated]
+pub struct MDecode2 {}
+
+impl MDecode2 {}

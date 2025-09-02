@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, Sender},
@@ -7,13 +6,11 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use ffmpeg_next::{codec::audio, frame::Audio};
+use ffmpeg_next::frame::Audio;
 use sdl3::{
-    AudioSubsystem, Error, Sdl,
+    Error, Sdl,
     audio::{AudioCallback, AudioSpec, AudioStreamWithCallback},
 };
-
-use crate::decode::MDecodeVideoFrame;
 
 pub fn init_audio_subsystem<'a>(sdl: &Sdl, spec: &AudioSpec) -> Result<MPlayerAudio, Error> {
     let audio = sdl.audio()?;
@@ -32,49 +29,28 @@ pub fn init_audio_subsystem<'a>(sdl: &Sdl, spec: &AudioSpec) -> Result<MPlayerAu
 }
 
 pub struct MPlayerAudio {
-    pub tx: Sender<Option<Audio>>,
+    pub tx: Sender<Audio>,
     pub audio_spec: AudioSpec,
     pub device: AudioStreamWithCallback<MPlayerAudioCallbackCtx>,
 }
 
 pub struct MPlayerAudioCallbackCtx {
-    buffer: Arc<Mutex<Vec<u8>>>,
-    thread: JoinHandle<()>,
+    recv: Receiver<Audio>,
 }
 
 impl MPlayerAudioCallbackCtx {
-    pub fn new(audio_rx: Receiver<Option<Audio>>) -> MPlayerAudioCallbackCtx {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        let thread_buffer_arc = Arc::clone(&buffer);
-        let join_handle = thread::Builder::new()
-            .name("audio".to_string())
-            .spawn(move || {
-                let buffer = thread_buffer_arc;
-                for recv in audio_rx.iter() {
-                    match recv {
-                        Some(audio_frame) => {
-                            let mut guard = buffer.lock().unwrap();
-
-                            for byte in audio_frame.data(0) {
-                                guard.push(*byte);
-                            }
-                        }
-                        None => break,
-                    }
-                }
-            })
-            .unwrap();
-        MPlayerAudioCallbackCtx {
-            buffer,
-            thread: join_handle,
-        }
+    pub fn new(audio_rx: Receiver<Audio>) -> MPlayerAudioCallbackCtx {
+        MPlayerAudioCallbackCtx { recv: audio_rx }
     }
 }
 
 impl AudioCallback<f32> for MPlayerAudioCallbackCtx {
     fn callback(&mut self, stream: &mut sdl3::audio::AudioStream, _: i32) {
-        let mut buffer_lock = self.buffer.lock().unwrap();
-        let _ = stream.put_data(&buffer_lock.as_slice());
-        buffer_lock.clear();
+        match self.recv.try_recv() {
+            Ok(frame) => {
+                let _ = stream.put_data(frame.data(0));
+            }
+            Err(_) => {}
+        }
     }
 }
