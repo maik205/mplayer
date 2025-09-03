@@ -62,7 +62,6 @@ pub fn print_context_data(context: &Input) -> Result<(), ffmpeg::Error> {
         "duration (seconds): {:.2}",
         context.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
     );
-
     for stream in context.streams() {
         println!("stream index {}:", stream.index());
         println!("\ttime_base: {}", stream.time_base());

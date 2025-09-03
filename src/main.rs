@@ -3,15 +3,17 @@ use std::{
     process::exit,
     sync::mpsc,
     thread,
+    time::Instant,
 };
 
 use crate::mplayer::MPlayer;
 
 mod audio;
+mod constants;
 mod decode;
 mod mplayer;
 mod utils;
-mod constants;
+mod core;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
@@ -39,11 +41,21 @@ fn main() {
             }
         }
     });
-
+    let mut tick_count: u64 = 0;
     // Player runs in main thread
+    let mut timer = Instant::now();
     let player = MPlayer::setup();
     match player {
         Ok(mut player) => loop {
+            tick_count += 1;
+            if timer.elapsed().as_secs_f32() > 1.0 {
+                println!(
+                    "[TPS] {}",
+                    tick_count as f32 / timer.elapsed().as_secs_f32()
+                );
+                tick_count = 0;
+                timer = Instant::now();
+            }
             if player.should_exit {
                 exit(0);
             }
@@ -54,6 +66,7 @@ fn main() {
                     break;
                 }
             }
+
             player.tick(cli_command);
         },
         Err(err) => {

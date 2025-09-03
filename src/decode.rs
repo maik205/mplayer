@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -6,7 +7,7 @@ use std::time::{Duration, Instant};
 use ffmpeg_next::codec::{Context, audio};
 use ffmpeg_next::format::{Pixel, Sample};
 use ffmpeg_next::frame::Audio;
-use ffmpeg_next::{self as ffmpeg, Rational, Stream, format};
+use ffmpeg_next::{self as ffmpeg, format, Packet, Rational, Stream};
 use ffmpeg_next::{
     format::input,
     media::{self},
@@ -63,7 +64,7 @@ impl Default for MDecodeOptions {
     fn default() -> Self {
         Self {
             scaling_flag: software::scaling::Flags::BILINEAR,
-            look_range: Range::new(2, 5),
+            look_range: Range::new(2, 15),
             window_default_size: (1152, 648),
         }
     }
@@ -107,7 +108,7 @@ pub enum DecoderOutput {
 pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
     let (decoder_tx, context_rx) = mpsc::channel::<Option<DecoderOutput>>();
     let (context_tx, decoder_rx) = mpsc::channel::<Option<DecoderCommand>>();
-    let audio_spec = AudioSpec {
+    let audio_spec: AudioSpec = AudioSpec {
         freq: Some(44100 / 2),
         channels: Some(2),
         format: Some(AudioFormat::F32LE),
@@ -187,7 +188,7 @@ pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
                                                 .unwrap();
                                         }
 
-                                        if let Ok(()) = inner
+                                        while let Ok(()) = inner
                                             .video_decoder
                                             .receive_frame(&mut video_frame_buffer)
                                         {
@@ -324,8 +325,10 @@ pub fn get_decoder(
                 });
             }
         }
+        return Err(MDecodeError::ContextCantBeInitialized);
+    } else {
+        return Err(MDecodeError::FileNotFound);
     }
-    return Err(MDecodeError::ContextCantBeInitialized);
 }
 
 impl MDecode {
@@ -358,7 +361,3 @@ pub struct MDecoderStats {
     pub decode_latency: f32,
 }
 
-// I think lets not implement the decoder as an iterator, thats not really suitable and makes code overly [complicated]
-pub struct MDecode2 {}
-
-impl MDecode2 {}

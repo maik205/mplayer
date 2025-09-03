@@ -183,7 +183,7 @@ impl MPlayer {
                     }
                 }
 
-                if self.to_display.len() < 5 {
+                if self.to_display.len() < 50 {
                     if let Some(decoder_output) = decoder.next() {
                         match decoder_output {
                             crate::decode::DecoderOutput::Video(frame) => {
