@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use ffmpeg_next::codec::{Context, audio};
 use ffmpeg_next::format::{Pixel, Sample};
 use ffmpeg_next::frame::Audio;
-use ffmpeg_next::{self as ffmpeg, format, Packet, Rational, Stream};
+use ffmpeg_next::{self as ffmpeg, Packet, Rational, Stream, format};
 use ffmpeg_next::{
     format::input,
     media::{self},
@@ -58,6 +58,7 @@ pub struct MediaInfo {
     pub frame_time_ns: i32,
     pub frame_time_ms: i32,
     pub audio_spec: AudioSpec,
+    pub time_base: Rational,
 }
 
 impl Default for MDecodeOptions {
@@ -298,6 +299,7 @@ pub fn get_decoder(
                     channels: Some(audio_decoder.channels().into()),
                     format: Some(audio_decoder.format().convert()),
                 },
+                time_base: video_decoder.time_base(),
             };
 
             let ar = Rational::new(video_decoder.width() as i32, video_decoder.height() as i32);
@@ -360,4 +362,3 @@ pub enum MDecodeError {
 pub struct MDecoderStats {
     pub decode_latency: f32,
 }
-
