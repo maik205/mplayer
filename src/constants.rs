@@ -1,4 +1,4 @@
-use ffmpeg_next::format::{sample::Type, Pixel, Sample};
+use ffmpeg_next::format::{Pixel, Sample, sample::Type};
 use sdl3::{audio::AudioFormat, pixels::PixelFormatEnum};
 
 pub trait ConvFormat<To> {
@@ -15,7 +15,7 @@ impl ConvFormat<AudioFormat> for Sample {
             Sample::I64(Type::Planar) => AudioFormat::UNKNOWN,
             Sample::F32(_) => AudioFormat::F32BE,
             Sample::F64(_) => AudioFormat::UNKNOWN,
-            _ => AudioFormat::UNKNOWN
+            _ => AudioFormat::UNKNOWN,
         }
     }
 }

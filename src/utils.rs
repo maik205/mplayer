@@ -2,8 +2,8 @@ use ffmpeg_next::{self as ffmpeg, Rational, format::context::Input};
 
 #[derive(Clone)]
 pub struct Range {
-    min: u32,
-    max: u32,
+    pub min: u32,
+    pub max: u32,
 }
 
 impl std::fmt::Debug for Range {

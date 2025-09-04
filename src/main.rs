@@ -10,10 +10,10 @@ use crate::mplayer::MPlayer;
 
 mod audio;
 mod constants;
+mod core;
 mod decode;
 mod mplayer;
 mod utils;
-mod core;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Command>();

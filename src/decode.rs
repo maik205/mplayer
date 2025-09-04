@@ -4,10 +4,11 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use ffmpeg_next::codec::{Context, audio};
-use ffmpeg_next::format::{Pixel, Sample};
-use ffmpeg_next::frame::Audio;
-use ffmpeg_next::{self as ffmpeg, Packet, Rational, Stream, format};
+use ffmpeg_next::codec::Context;
+use ffmpeg_next::format::Pixel;
+use ffmpeg_next::format::context::Input;
+use ffmpeg_next::software::scaling::Flags;
+use ffmpeg_next::{self as ffmpeg, Rational};
 use ffmpeg_next::{
     format::input,
     media::{self},
@@ -28,6 +29,30 @@ pub struct MDecodeOptions {
     // The look range provides an upper limit to the decoder so that it wouldnt fetch more and also a lower bound to check the decoder health.
     pub look_range: Range,
     pub window_default_size: (u32, u32),
+    pub pixel_format: Pixel,
+}
+impl Default for MDecodeOptions {
+    fn default() -> Self {
+        MDecodeOptions {
+            look_range: Range::new(5, 15),
+            scaling_flag: Flags::BILINEAR,
+            window_default_size: (1920, 1080),
+            pixel_format: Pixel::RGB24,
+        }
+    }
+}
+
+const DEFAULT_DECODE_OPTS: MDecodeOptions = MDecodeOptions {
+    look_range: Range { min: 5, max: 15 },
+    scaling_flag: Flags::BILINEAR,
+    window_default_size: (1920, 1080),
+    pixel_format: Pixel::RGB24,
+};
+
+impl Default for &MDecodeOptions {
+    fn default() -> Self {
+        &DEFAULT_DECODE_OPTS
+    }
 }
 pub struct MDecode {
     // pub inner: MDecodeInner,
@@ -61,12 +86,42 @@ pub struct MediaInfo {
     pub time_base: Rational,
 }
 
-impl Default for MDecodeOptions {
-    fn default() -> Self {
-        Self {
-            scaling_flag: software::scaling::Flags::BILINEAR,
-            look_range: Range::new(2, 15),
-            window_default_size: (1152, 648),
+impl MediaInfo {
+    pub fn get_media_info_from_input(input: Input) -> MediaInfo {
+        let v_stream = input
+            .streams()
+            .best(media::Type::Video)
+            .expect("No video stream found");
+        let a_stream = input
+            .streams()
+            .best(media::Type::Audio)
+            .expect("No audio stream found");
+
+        let video_decoder = Context::from_parameters(v_stream.parameters())
+            .expect("Failed to get video decoder context")
+            .decoder()
+            .video()
+            .expect("Failed to get video decoder");
+
+        let audio_decoder = Context::from_parameters(a_stream.parameters())
+            .expect("Failed to get audio decoder context")
+            .decoder()
+            .audio()
+            .expect("Failed to get audio decoder");
+
+        MediaInfo {
+            v_width: video_decoder.width(),
+            v_height: video_decoder.height(),
+            video_rate: v_stream.rate(),
+            aspect_ratio: video_decoder.aspect_ratio(),
+            frame_time_ms: frame_time_ms(v_stream.rate()),
+            frame_time_ns: frame_time_ns(v_stream.rate()),
+            audio_spec: AudioSpec {
+                freq: Some(audio_decoder.rate() as i32),
+                channels: Some(audio_decoder.channels().into()),
+                format: Some(audio_decoder.format().convert()),
+            },
+            time_base: video_decoder.time_base(),
         }
     }
 }
