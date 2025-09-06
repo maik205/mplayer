@@ -1,7 +1,7 @@
 use ffmpeg_next::{
     self as ffmpeg, Rational,
     codec::{Context, Parameters},
-    format::Pixel,
+    format::{Pixel, context::input},
     frame::{Audio, Video},
     media::Type,
     software::scaling::Flags,
@@ -9,8 +9,8 @@ use ffmpeg_next::{
 use std::{
     collections::VecDeque,
     sync::{
-        Mutex, RwLock,
-        mpsc::{self, Receiver, SyncSender},
+        Arc, Mutex, RwLock,
+        mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
 };
@@ -24,8 +24,7 @@ use crate::{
 };
 
 pub struct MPlayerCore {
-    packet_queue: RwLock<VecDeque<(Packet, PacketMarker)>>,
-    read_location: RwLock<u16>,
+    packet_queue: Arc<RwLock<VecDeque<(Packet, PacketMarker)>>>,
     look_range: Range,
     video: Option<DecodeThread<Video>>,
     audio: Option<DecodeThread<Audio>>,
@@ -36,6 +35,31 @@ pub struct MPlayerCore {
     has_media: bool,
 }
 
+pub enum MediaThreadCommand {
+    Play,
+    Pause,
+    Seek(u32),
+}
+
+pub enum MediaThreadStatus {
+    Paused(u32),
+    Seeking(/*From*/ u32, /*To*/ u32),
+    Playing(u32),
+}
+struct MediaThread {
+    command_tx: Sender<MediaThreadCommand>,
+    pub status: Arc<RwLock<MediaThreadStatus>>,
+    handle: JoinHandle<()>,
+}
+
+impl MediaThread {
+    pub fn open_media(resource_uri: &str) -> MediaThread {
+        todo!()
+    }
+}
+
+pub struct StreamDescriptor {}
+
 pub enum PacketDistributorCommand {
     Exit,
     MoveCursor(u32),
@@ -44,7 +68,7 @@ pub enum PacketDistributorCommand {
 impl MPlayerCore {
     pub fn new(config: Option<&'static MDecodeOptions>) -> MPlayerCore {
         MPlayerCore {
-            packet_queue: RwLock::new(VecDeque::new()),
+            packet_queue: Arc::new(RwLock::new(VecDeque::new())),
             video: None,
             audio: None,
             config: config.unwrap_or_default(),
@@ -53,7 +77,6 @@ impl MPlayerCore {
             officer_he_has_a_gun: None,
             what_gun: None,
             look_range: Range::new(10, 50),
-            read_location: RwLock::new(0),
         }
     }
 
@@ -95,19 +118,32 @@ impl MPlayerCore {
             ));
         }
         let (tx_cmd_packets, rx_cmd_packets) = mpsc::channel::<PacketDistributorCommand>();
+        let read_location = Arc::new(RwLock::new(0));
+        let read_location_lock = Arc::clone(&read_location);
+        let packet_queue_read_lock = Arc::clone(&self.packet_queue);
+        let (tx_packeteer, rx_packeteer) = mpsc::sync_channel(self.config.look_range.min as usize);
         let gun = thread::Builder::new()
             .name("packeteer".to_string())
-            .spawn(|| {
-                let rx_cmd_packets = rx_cmd_packets;
-                let internal_counter = 0;
-                loop {
-                    if let Ok(command) = rx_cmd_packets.try_recv() {}
-                }
-            })
+            .spawn(move || {})
             .unwrap();
+
         if let Ok(mut lock) = self.packet_queue.write() {
             for (stream, packet) in input_ctx.packets() {
-                lock.push_back((packet.clone(), stream.convert()));
+                lock.push_back((
+                    packet,
+                    stream.convert(), /* Low conversion cost, acceptable */
+                ));
+
+                match self
+                    .look_range
+                    .range_check_inclusive(*read_location.try_read().unwrap())
+                {
+                    crate::utils::RangeCheck::Higher => {
+                        lock.clear();
+                        let _ = tx_cmd_packets.send(PacketDistributorCommand::MoveCursor(0));
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -177,9 +213,9 @@ impl DecodeThread<Video> {
                     .video()
                     .unwrap();
 
-                let mut scaling_config_ = None;
+                let scaling_config_;
                 {
-                    scaling_config_ = Some(scaling_config.lock().unwrap().clone()); 
+                    scaling_config_ = Some(scaling_config.lock().unwrap().clone());
                 }
                 let scaling_config = scaling_config_.unwrap();
 
@@ -195,9 +231,9 @@ impl DecodeThread<Video> {
                     ),
                     scaling_config.scaling_flag,
                 );
-                
+
                 let mut frame_buffer = Video::empty();
-                
+
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
                     video_decoder.send_packet(&packet).unwrap();
                     if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
