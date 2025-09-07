@@ -17,6 +17,7 @@ use sdl3::{
 
 use crate::{
     Command,
+    audio::init_audio_subsystem,
     constants::ConvFormat,
     core::MPlayerCore,
     decode::{DecoderCommand, MDecodeAudioFrame, MDecodeOptions, MDecodeVideoFrame, init},
@@ -29,7 +30,6 @@ use crate::{
 
 pub struct MPlayer {
     _sdl_video: VideoSubsystem,
-    _sdl_context: Sdl,
     _initialized_at: Instant,
     sdl_event_pump: EventPump,
     pub should_exit: bool,
@@ -39,7 +39,7 @@ pub struct MPlayer {
     // will use in future to display some player stats like yt's stats for nerds
     _player_stats: MPlayerStats,
     clock: u128,
-    media_info: Option<MediaInfo>,
+    audio: MPlayerAudio,
 }
 
 pub struct MPlayerStats {
@@ -54,7 +54,11 @@ pub static OPTS: MDecodeOptions = MDecodeOptions {
     look_range: Range { min: 10, max: 100 },
     window_default_size: (1920, 1080),
     pixel_format: ffmpeg_next::format::Pixel::RGB24,
-    audio_spec: AudioSpec { freq: Some(22100), channels: Some(2), format: Some(AudioFormat::F32BE) }
+    audio_spec: AudioSpec {
+        freq: Some(44100/2),
+        channels: Some(2),
+        format: Some(AudioFormat::F32LE),
+    },
 };
 
 impl MPlayer {
@@ -89,7 +93,6 @@ impl MPlayer {
 
         Ok(MPlayer {
             _sdl_video: sdl_video,
-            _sdl_context: sdl_ctx,
             sdl_event_pump,
             _initialized_at: Instant::now(),
             should_exit: false,
@@ -100,7 +103,7 @@ impl MPlayer {
                 time_to_present: -1.0,
             },
             clock: 0,
-            media_info: None,
+            audio: init_audio_subsystem(&sdl_ctx, &OPTS.audio_spec).unwrap(),
         })
     }
     pub fn tick(&mut self, cli_command: Option<Command>) -> () {
@@ -149,6 +152,12 @@ impl MPlayer {
                     self.canvas.clear();
                     let _ = self.canvas.copy(&self.video_texture, None, None);
                     self.canvas.present();
+                }
+            }
+
+            if let Some(audio) = &lock.audio {
+                if let Ok(audio) = audio.output_rx.try_recv() {
+                    let _ = self.audio.tx.send(audio);
                 }
             }
         }

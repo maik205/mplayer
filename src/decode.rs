@@ -160,7 +160,7 @@ pub enum DecoderOutput {
     Audio(MDecodeAudioFrame),
     MediaInfo(MediaInfo),
 }
-
+// goodbye, decode.rs!
 pub fn init(decode_options: Option<MDecodeOptions>, sdl: &Sdl) -> MDecode {
     let (decoder_tx, context_rx) = mpsc::channel::<Option<DecoderOutput>>();
     let (context_tx, decoder_rx) = mpsc::channel::<Option<DecoderCommand>>();

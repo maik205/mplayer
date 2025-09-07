@@ -95,7 +95,7 @@ impl MPlayerCore {
                     if let Some(video_stream) =
                         input_ctx.streams().best(ffmpeg_next::media::Type::Video)
                     {
-                        let (p_tx_video, p_rx_video) = mpsc::sync_channel(100);
+                        let (p_tx_video, p_rx_video) = mpsc::sync_channel(20);
                         video_tx = Some(p_tx_video);
                         video_marker = Some(video_stream.convert());
                         if let Ok(mut lock) = mutex.lock() {
@@ -115,7 +115,7 @@ impl MPlayerCore {
                     if let Some(audio_stream) =
                         input_ctx.streams().best(ffmpeg_next::media::Type::Audio)
                     {
-                        let (p_tx_audio, p_rx_audio) = mpsc::sync_channel(100);
+                        let (p_tx_audio, p_rx_audio) = mpsc::sync_channel(20);
                         audio_marker = Some(audio_stream.convert());
                         audio_tx = Some(p_tx_audio);
                         if let Ok(mut lock) = mutex.lock() {
@@ -132,9 +132,9 @@ impl MPlayerCore {
                     }
 
                     // Instead of collecting all packets, process them one by one to reduce memory pressure
-                    let mut packet_iter = input_ctx.packets();
+                    // stfu AI you're stupid as hell.
 
-                    while let Some((stream, packet)) = packet_iter.next() {
+                    while let Some((stream, packet)) = input_ctx.packets().next() {
                         if let Ok(command) = command_rx.try_recv() {
                             match command {
                                 MediaThreadCommand::Play => {}
