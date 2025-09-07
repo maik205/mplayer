@@ -1,4 +1,13 @@
-use ffmpeg_next::{self as ffmpeg, Rational, format::context::Input};
+use ffmpeg_next::{
+    self as ffmpeg, Rational,
+    codec::Context,
+    format::{Pixel, context::Input},
+    media,
+    software::{self, scaling::Flags},
+};
+use sdl3::audio::{AudioFormat, AudioSpec};
+
+use crate::{constants::ConvFormat, mplayer::OPTS};
 
 #[derive(Clone)]
 pub struct Range {
@@ -147,4 +156,86 @@ pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -
         return 0;
     }
     (frame_rate.0 as i64 * time_base.1 as i64) / (frame_rate.1 as i64 * time_base.0 as i64)
+}
+
+#[derive(Debug, Clone)]
+pub struct MDecodeOptions {
+    pub scaling_flag: software::scaling::Flags,
+    // The look range provides an upper limit to the decoder so that it wouldnt fetch more and also a lower bound to check the decoder health.
+    pub look_range: Range,
+    pub window_default_size: (u32, u32),
+    pub pixel_format: Pixel,
+    pub audio_spec: AudioSpec,
+}
+impl Default for MDecodeOptions {
+    fn default() -> Self {
+        MDecodeOptions {
+            look_range: Range::new(5, 15),
+            scaling_flag: Flags::BILINEAR,
+            window_default_size: (1920, 1080),
+            pixel_format: Pixel::RGB24,
+            audio_spec: AudioSpec {
+                freq: Some(22100),
+                channels: Some(2),
+                format: Some(AudioFormat::F32BE),
+            },
+        }
+    }
+}
+
+impl Default for &MDecodeOptions {
+    fn default() -> Self {
+        &OPTS
+    }
+}
+#[derive(Debug, Clone, Copy)]
+pub struct MediaInfo {
+    pub v_width: u32,
+    pub v_height: u32,
+    pub video_rate: Rational,
+    pub aspect_ratio: Rational,
+    pub frame_time_ns: i32,
+    pub frame_time_ms: i32,
+    pub audio_spec: AudioSpec,
+    pub time_base: Rational,
+}
+
+impl MediaInfo {
+    pub fn get_media_info_from_input(input: Input) -> MediaInfo {
+        let v_stream = input
+            .streams()
+            .best(media::Type::Video)
+            .expect("No video stream found");
+        let a_stream = input
+            .streams()
+            .best(media::Type::Audio)
+            .expect("No audio stream found");
+
+        let video_decoder = Context::from_parameters(v_stream.parameters())
+            .expect("Failed to get video decoder context")
+            .decoder()
+            .video()
+            .expect("Failed to get video decoder");
+
+        let audio_decoder = Context::from_parameters(a_stream.parameters())
+            .expect("Failed to get audio decoder context")
+            .decoder()
+            .audio()
+            .expect("Failed to get audio decoder");
+
+        MediaInfo {
+            v_width: video_decoder.width(),
+            v_height: video_decoder.height(),
+            video_rate: v_stream.rate(),
+            aspect_ratio: video_decoder.aspect_ratio(),
+            frame_time_ms: frame_time_ms(v_stream.rate()),
+            frame_time_ns: frame_time_ns(v_stream.rate()),
+            audio_spec: AudioSpec {
+                freq: Some(audio_decoder.rate() as i32),
+                channels: Some(audio_decoder.channels().into()),
+                format: Some(audio_decoder.format().convert()),
+            },
+            time_base: video_decoder.time_base(),
+        }
+    }
 }

@@ -1,14 +1,12 @@
 use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard},
-    thread,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::Instant,
 };
 
-use ffmpeg_next::{frame::Video, media, software::scaling::Flags};
+use ffmpeg_next::software::scaling::Flags;
 use sdl3::{
-    EventPump, Sdl, VideoSubsystem,
-    audio::{AudioCallback, AudioFormat, AudioSpec},
+    EventPump, VideoSubsystem,
+    audio::{AudioFormat, AudioSpec},
     event::Event,
     pixels::{Color, PixelFormatEnum},
     render::{Canvas, Texture},
@@ -20,13 +18,10 @@ use crate::{
     audio::init_audio_subsystem,
     constants::ConvFormat,
     core::MPlayerCore,
-    decode::{DecoderCommand, MDecodeAudioFrame, MDecodeOptions, MDecodeVideoFrame, init},
+    utils::MDecodeOptions,
     utils::Range,
 };
-use crate::{
-    audio::MPlayerAudio,
-    decode::{MDecode, MediaInfo},
-};
+use crate::audio::MPlayerAudio;
 
 pub struct MPlayer {
     _sdl_video: VideoSubsystem,
@@ -124,7 +119,7 @@ impl MPlayer {
                     frame.pts().unwrap() > 0
                     {}
                      */
-
+                    println!("{}", frame.pts().unwrap());
                     let size = (frame.width(), frame.height());
                     if size != self.canvas.output_size().unwrap() {
                         let _ = self

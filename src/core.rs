@@ -1,12 +1,9 @@
 use ffmpeg_next::{
     self as ffmpeg, Rational,
     codec::{Context, Parameters},
-    format::Pixel,
     frame::{Audio, Video},
-    software::scaling::Flags,
 };
 use std::{
-    collections::VecDeque,
     sync::{
         Arc, Mutex, RwLock,
         mpsc::{self, Receiver, Sender, SyncSender},
@@ -14,16 +11,16 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use ffmpeg::{Error, Packet, Stream, format::input};
+use ffmpeg::{Packet, Stream, format::input};
 
 use crate::{
     constants::ConvFormat,
-    decode::{MDecodeOptions, MediaInfo},
+    utils::{MDecodeOptions, MediaInfo},
     utils::{calculate_tpf_from_time_base, height_from_ar, Range},
 };
 
 pub struct MPlayerCore {
-    pub packet_queue: Arc<RwLock<VecDeque<(Packet, PacketMarker)>>>,
+    // pub packet_queue: Arc<RwLock<VecDeque<(Packet, PacketMarker)>>>,
     pub look_range: Range,
     pub video: Option<DecodeThread<Video>>,
     pub audio: Option<DecodeThread<Audio>>,
@@ -53,7 +50,6 @@ pub struct MediaThread {
     handle: JoinHandle<()>,
 }
 
-pub struct StreamDescriptor {}
 
 pub enum PacketDistributorCommand {
     Exit,
@@ -63,7 +59,7 @@ pub enum PacketDistributorCommand {
 impl MPlayerCore {
     pub fn new(config: Option<&'static MDecodeOptions>) -> MPlayerCore {
         MPlayerCore {
-            packet_queue: Arc::new(RwLock::new(VecDeque::new())),
+            // packet_queue: Arc::new(RwLock::new(VecDeque::new())),
             video: None,
             audio: None,
             config: config.unwrap_or_default(),
@@ -104,7 +100,7 @@ impl MPlayerCore {
                                 p_rx_video,
                                 Some("video".to_string()),
                                 Some(ThreadConfig {
-                                    buffer_capacity: 10,
+                                    buffer_capacity: 5,
                                 }),
                                 Mutex::new(decode_options),
                             ));
@@ -124,7 +120,7 @@ impl MPlayerCore {
                                 p_rx_audio,
                                 Some("audio".to_string()),
                                 Some(ThreadConfig {
-                                    buffer_capacity: 10,
+                                    buffer_capacity: 5,
                                 }),
                             ));
                             lock.has_media = true;
@@ -228,13 +224,6 @@ impl<T> DecodeThread<T> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ScalingConfig {
-    pub scaling_flag: Flags,
-    pub width: u32,
-    pub aspect_ratio: Rational,
-    pub pixel_format: Pixel,
-}
 
 impl DecodeThread<Video> {
     pub fn spawn(

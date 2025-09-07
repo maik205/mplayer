@@ -1,10 +1,4 @@
-use std::{
-    sync::{
-        Arc, Mutex,
-        mpsc::{self, Receiver, Sender},
-    },
-    thread::{self, JoinHandle},
-};
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use ffmpeg_next::frame::Audio;
 use sdl3::{
