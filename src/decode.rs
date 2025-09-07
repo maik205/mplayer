@@ -21,6 +21,7 @@ use sdl3::pixels::PixelFormatEnum;
 
 use crate::audio::{MPlayerAudio, init_audio_subsystem};
 use crate::constants::ConvFormat;
+use crate::mplayer::OPTS;
 use crate::utils::{Range, RangeCheck, frame_time_ms, frame_time_ns, print_context_data};
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,7 @@ pub struct MDecodeOptions {
     pub look_range: Range,
     pub window_default_size: (u32, u32),
     pub pixel_format: Pixel,
+    pub audio_spec: AudioSpec,
 }
 impl Default for MDecodeOptions {
     fn default() -> Self {
@@ -38,20 +40,18 @@ impl Default for MDecodeOptions {
             scaling_flag: Flags::BILINEAR,
             window_default_size: (1920, 1080),
             pixel_format: Pixel::RGB24,
+            audio_spec: AudioSpec {
+                freq: Some(22100),
+                channels: Some(2),
+                format: Some(AudioFormat::F32BE),
+            },
         }
     }
 }
 
-const DEFAULT_DECODE_OPTS: MDecodeOptions = MDecodeOptions {
-    look_range: Range { min: 5, max: 15 },
-    scaling_flag: Flags::BILINEAR,
-    window_default_size: (1920, 1080),
-    pixel_format: Pixel::RGB24,
-};
-
 impl Default for &MDecodeOptions {
     fn default() -> Self {
-        &DEFAULT_DECODE_OPTS
+        &OPTS
     }
 }
 pub struct MDecode {

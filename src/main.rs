@@ -27,7 +27,7 @@ fn main() {
                     "exit" => {
                         let _ = tx.send(Command::Shutdown);
                         println!("shutting down mplayer");
-                        break;
+                        exit(0);
                     }
                     _ if line.contains("open") => {
                         if let Some(dir) = line.split("open").nth(1) {

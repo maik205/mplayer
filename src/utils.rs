@@ -138,3 +138,13 @@ pub enum RangeCheck {
     InRange,
     Higher,
 }
+
+pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> i64 {
+    // Time per frame (tpf) in time_base units: tpf = time_base.den / frame_rate
+    // time_base = (num, den), frame_rate = (num, den)
+    // tpf = (frame_rate.num * time_base.den) / (frame_rate.den * time_base.num)
+    if time_base.0 == 0 || frame_rate.0 == 0 {
+        return 0;
+    }
+    (frame_rate.0 as i64 * time_base.1 as i64) / (frame_rate.1 as i64 * time_base.0 as i64)
+}

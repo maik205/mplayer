@@ -1,9 +1,8 @@
 use ffmpeg_next::{
     self as ffmpeg, Rational,
     codec::{Context, Parameters},
-    format::{Pixel, context::input},
+    format::Pixel,
     frame::{Audio, Video},
-    media::Type,
     software::scaling::Flags,
 };
 use std::{
@@ -20,42 +19,38 @@ use ffmpeg::{Error, Packet, Stream, format::input};
 use crate::{
     constants::ConvFormat,
     decode::{MDecodeOptions, MediaInfo},
-    utils::{Range, height_from_ar},
+    utils::{calculate_tpf_from_time_base, height_from_ar, Range},
 };
 
 pub struct MPlayerCore {
-    packet_queue: Arc<RwLock<VecDeque<(Packet, PacketMarker)>>>,
-    look_range: Range,
-    video: Option<DecodeThread<Video>>,
-    audio: Option<DecodeThread<Audio>>,
-    config: &'static MDecodeOptions,
-    media_info: Option<MediaInfo>,
-    officer_he_has_a_gun: Option<SyncSender<PacketDistributorCommand>>,
-    what_gun: Option<JoinHandle<()>>,
-    has_media: bool,
+    pub packet_queue: Arc<RwLock<VecDeque<(Packet, PacketMarker)>>>,
+    pub look_range: Range,
+    pub video: Option<DecodeThread<Video>>,
+    pub audio: Option<DecodeThread<Audio>>,
+    pub config: &'static MDecodeOptions,
+    pub media_info: Option<MediaInfo>,
+    pub officer_he_has_a_gun: Option<SyncSender<PacketDistributorCommand>>,
+    pub what_gun: Option<JoinHandle<()>>,
+    pub has_media: bool,
 }
 
 pub enum MediaThreadCommand {
     Play,
     Pause,
-    Seek(u32),
+    Seek(i64),
+    Exit,
 }
 
 pub enum MediaThreadStatus {
     Paused(u32),
     Seeking(/*From*/ u32, /*To*/ u32),
     Playing(u32),
+    Stopped,
 }
-struct MediaThread {
+pub struct MediaThread {
     command_tx: Sender<MediaThreadCommand>,
     pub status: Arc<RwLock<MediaThreadStatus>>,
     handle: JoinHandle<()>,
-}
-
-impl MediaThread {
-    pub fn open_media(resource_uri: &str) -> MediaThread {
-        todo!()
-    }
 }
 
 pub struct StreamDescriptor {}
@@ -81,73 +76,112 @@ impl MPlayerCore {
     }
 
     pub fn open_media(
-        &mut self,
         path: String,
         decode_options: Option<MDecodeOptions>,
-    ) -> Result<(), Error> {
-        let mut input_ctx = input(&path)?;
-        let decode_options = decode_options.unwrap_or_default();
+        mutex: Arc<Mutex<MPlayerCore>>,
+    ) -> MediaThread {
+        let (command_tx, command_rx) = mpsc::channel::<MediaThreadCommand>();
+        let status = Arc::new(RwLock::new(MediaThreadStatus::Paused(0)));
+        let handle = thread::Builder::new()
+            .name("main_media".to_string())
+            .spawn(move || {
+                if let Ok(mut input_ctx) = input(&path) {
+                    let decode_options = decode_options.unwrap_or_default();
 
-        let mut video_tx = None;
-        let mut audio_tx = None;
-
-        if let Some(video_stream) = input_ctx.streams().best(ffmpeg_next::media::Type::Video) {
-            let (p_tx_video, p_rx_video) = mpsc::channel();
-            video_tx = Some(p_tx_video);
-            self.video = Some(DecodeThread::<Video>::spawn(
-                video_stream.parameters(),
-                p_rx_video,
-                Some("video".to_string()),
-                Some(ThreadConfig {
-                    buffer_capacity: 10,
-                }),
-                Mutex::new(decode_options),
-            ));
-        }
-
-        if let Some(video_stream) = input_ctx.streams().best(ffmpeg_next::media::Type::Audio) {
-            let (p_tx_audio, p_rx_audio) = mpsc::channel();
-            audio_tx = Some(p_tx_audio);
-            self.audio = Some(DecodeThread::<Audio>::spawn(
-                video_stream.parameters(),
-                p_rx_audio,
-                Some("audio".to_string()),
-                Some(ThreadConfig {
-                    buffer_capacity: 10,
-                }),
-            ));
-        }
-        let (tx_cmd_packets, rx_cmd_packets) = mpsc::channel::<PacketDistributorCommand>();
-        let read_location = Arc::new(RwLock::new(0));
-        let read_location_lock = Arc::clone(&read_location);
-        let packet_queue_read_lock = Arc::clone(&self.packet_queue);
-        let (tx_packeteer, rx_packeteer) = mpsc::sync_channel(self.config.look_range.min as usize);
-        let gun = thread::Builder::new()
-            .name("packeteer".to_string())
-            .spawn(move || {})
-            .unwrap();
-
-        if let Ok(mut lock) = self.packet_queue.write() {
-            for (stream, packet) in input_ctx.packets() {
-                lock.push_back((
-                    packet,
-                    stream.convert(), /* Low conversion cost, acceptable */
-                ));
-
-                match self
-                    .look_range
-                    .range_check_inclusive(*read_location.try_read().unwrap())
-                {
-                    crate::utils::RangeCheck::Higher => {
-                        lock.clear();
-                        let _ = tx_cmd_packets.send(PacketDistributorCommand::MoveCursor(0));
+                    let mut video_tx = None;
+                    let mut audio_tx = None;
+                    let mut video_marker = None;
+                    let mut audio_marker = None;
+                    if let Some(video_stream) =
+                        input_ctx.streams().best(ffmpeg_next::media::Type::Video)
+                    {
+                        let (p_tx_video, p_rx_video) = mpsc::sync_channel(100);
+                        video_tx = Some(p_tx_video);
+                        video_marker = Some(video_stream.convert());
+                        if let Ok(mut lock) = mutex.lock() {
+                            lock.video = Some(DecodeThread::<Video>::spawn(
+                                video_stream.parameters(),
+                                p_rx_video,
+                                Some("video".to_string()),
+                                Some(ThreadConfig {
+                                    buffer_capacity: 10,
+                                }),
+                                Mutex::new(decode_options),
+                            ));
+                            lock.has_media = true;
+                        }
                     }
-                    _ => {}
-                }
-            }
-        }
 
-        Ok(())
+                    if let Some(audio_stream) =
+                        input_ctx.streams().best(ffmpeg_next::media::Type::Audio)
+                    {
+                        let (p_tx_audio, p_rx_audio) = mpsc::sync_channel(100);
+                        audio_marker = Some(audio_stream.convert());
+                        audio_tx = Some(p_tx_audio);
+                        if let Ok(mut lock) = mutex.lock() {
+                            lock.audio = Some(DecodeThread::<Audio>::spawn(
+                                audio_stream.parameters(),
+                                p_rx_audio,
+                                Some("audio".to_string()),
+                                Some(ThreadConfig {
+                                    buffer_capacity: 10,
+                                }),
+                            ));
+                            lock.has_media = true;
+                        }
+                    }
+
+                    // Instead of collecting all packets, process them one by one to reduce memory pressure
+                    let mut packet_iter = input_ctx.packets();
+
+                    while let Some((stream, packet)) = packet_iter.next() {
+                        if let Ok(command) = command_rx.try_recv() {
+                            match command {
+                                MediaThreadCommand::Play => {}
+                                MediaThreadCommand::Pause => {
+                                    if let Ok(MediaThreadCommand::Play) = command_rx.recv() {
+                                        continue;
+                                    }
+                                }
+                                MediaThreadCommand::Seek(to) => {
+                                    // let _ = input_ctx.seek(to, ..);
+                                }
+                                MediaThreadCommand::Exit => {
+                                    if let Some(ref mut vid_tx) = video_tx {
+                                        let _ = vid_tx.send(ThreadData::Kill);
+                                    }
+                                    if let Some(ref mut audio_tx) = audio_tx {
+                                        let _ = audio_tx.send(ThreadData::Kill);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(marker) = &video_marker
+                            && let Some(ref mut vid_tx) = video_tx
+                        {
+                            if marker.stream_index == stream.index() {
+                                let _ = vid_tx.send(ThreadData::Packet(packet));
+                                continue;
+                            }
+                        }
+                        if let Some(marker) = &audio_marker
+                            && let Some(ref mut aud_tx) = audio_tx
+                        {
+                            if marker.stream_index == stream.index() {
+                                let _ = aud_tx.send(ThreadData::Packet(packet));
+                                continue;
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap();
+        MediaThread {
+            command_tx,
+            status: status.clone(),
+            handle,
+        }
     }
 }
 
@@ -159,14 +193,16 @@ impl Default for ThreadConfig {
     }
 }
 
-struct PacketMarker {
-    stream_id: usize,
+pub struct PacketMarker {
+    stream_index: usize,
+    stream_id: i32,
 }
 
 impl ConvFormat<PacketMarker> for Stream<'_> {
     fn convert(&self) -> PacketMarker {
         PacketMarker {
-            stream_id: self.index(),
+            stream_index: self.index(),
+            stream_id: self.id(),
         }
     }
 }
@@ -185,6 +221,13 @@ pub struct DecodeThread<OutputType> {
     pub handle: JoinHandle<()>,
     pub output_rx: Receiver<OutputType>,
 }
+
+impl<T> DecodeThread<T> {
+    pub fn join(self) {
+        let _ = self.handle.join();
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ScalingConfig {
     pub scaling_flag: Flags,
@@ -233,10 +276,13 @@ impl DecodeThread<Video> {
                 );
 
                 let mut frame_buffer = Video::empty();
-
+                let counter = 0;
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
                     video_decoder.send_packet(&packet).unwrap();
                     if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
+                        if let None = frame_buffer.pts() {
+                            frame_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(video_decoder.time_base(), video_decoder.frame_rate().unwrap())));
+                        }                                
                         if let Ok(ref mut scaler) = scaling_context {
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
@@ -289,3 +335,5 @@ impl DecodeThread<Audio> {
         }
     }
 }
+
+impl MediaThread {}
