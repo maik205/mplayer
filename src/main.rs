@@ -3,13 +3,16 @@ use std::{
     process::exit,
     sync::mpsc,
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
+
+use ffmpeg_next::Rational;
 
 use crate::mplayer::MPlayer;
 
 mod audio;
 mod constants;
+mod convert;
 mod core;
 mod mplayer;
 mod utils;
@@ -26,7 +29,6 @@ fn main() {
                     "exit" => {
                         let _ = tx.send(Command::Shutdown);
                         println!("shutting down mplayer");
-                        exit(0);
                     }
                     _ if line.contains("open") => {
                         if let Some(dir) = line.split("open").nth(1) {
@@ -40,34 +42,12 @@ fn main() {
             }
         }
     });
-    let mut tick_count: u64 = 0;
-    // Player runs in main thread
-    let mut timer = Instant::now();
     let player = MPlayer::setup();
-    match player {
-        Ok(mut player) => loop {
-            tick_count += 1;
-            if timer.elapsed().as_secs_f32() > 1.0 {
-                println!(
-                    "[TPS] {}",
-                    tick_count as f32 / timer.elapsed().as_secs_f32()
-                );
-                tick_count = 0;
-                timer = Instant::now();
-            }
-            if player.should_exit {
-                exit(0);
-            }
-            let mut cli_command = None;
-            if let Ok(command) = rx.try_recv() {
-                cli_command = Some(command.clone());
-                if let Command::Shutdown = command {
-                    break;
-                }
-            }
 
-            player.tick(cli_command);
-        },
+    match player {
+        Ok(mut player) => {
+            player.go(rx, Rational(1, 100));
+        }
         Err(err) => {
             println!("{:?}", err);
         }

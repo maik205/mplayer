@@ -6,25 +6,21 @@ use sdl3::{
     audio::{AudioCallback, AudioSpec, AudioStreamWithCallback},
 };
 
-pub fn init_audio_subsystem<'a>(sdl: &Sdl, spec: &AudioSpec) -> Result<MPlayerAudio, Error> {
+pub fn init_audio_subsystem<'a>(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, Error> {
     let audio = sdl.audio()?;
     let (tx, rx) = mpsc::channel();
     let ctx = MPlayerAudioCallbackCtx::new(rx);
     let device: sdl3::audio::AudioStreamWithCallback<MPlayerAudioCallbackCtx> =
         audio.open_playback_stream(&spec, ctx).expect("");
     let _ = device.resume();
-    let audio_sys = MPlayerAudio {
-        tx,
-        audio_spec: *spec,
-        device: device,
-    };
+
+    let audio_sys = MPlayerAudio { tx, device: device };
 
     Ok(audio_sys)
 }
 
 pub struct MPlayerAudio {
     pub tx: Sender<Audio>,
-    pub audio_spec: AudioSpec,
     pub device: AudioStreamWithCallback<MPlayerAudioCallbackCtx>,
 }
 

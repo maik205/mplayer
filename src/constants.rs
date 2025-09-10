@@ -10,8 +10,8 @@ impl ConvFormat<AudioFormat> for Sample {
         match self {
             Sample::None => AudioFormat::UNKNOWN,
             Sample::U8(_) => AudioFormat::U8,
-            Sample::I16(_) => AudioFormat::S16LE,
-            Sample::I32(_) => AudioFormat::S32LE,
+            Sample::I16(_) => AudioFormat::S16BE,
+            Sample::I32(_) => AudioFormat::S32BE,
             Sample::I64(Type::Planar) => AudioFormat::UNKNOWN,
             Sample::F32(_) => AudioFormat::F32BE,
             Sample::F64(_) => AudioFormat::UNKNOWN,

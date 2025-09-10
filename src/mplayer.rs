@@ -1,11 +1,15 @@
 use std::{
-    sync::{Arc, Mutex},
-    time::Instant,
+    sync::{
+        Arc, LazyLock, Mutex, RwLock,
+        mpsc::{Receiver, channel},
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
-use ffmpeg_next::software::scaling::Flags;
+use ffmpeg_next::{Rational, software::scaling::Flags};
 use sdl3::{
-    EventPump, VideoSubsystem,
+    EventPump, Sdl, VideoSubsystem,
     audio::{AudioFormat, AudioSpec},
     event::Event,
     pixels::{Color, PixelFormatEnum},
@@ -14,16 +18,13 @@ use sdl3::{
 };
 
 use crate::{
-    Command,
-    audio::init_audio_subsystem,
-    constants::ConvFormat,
-    core::MPlayerCore,
-    utils::MDecodeOptions,
-    utils::Range,
+    Command, audio::init_audio_subsystem, constants::ConvFormat, core::MPlayerCore,
+    utils::MDecodeOptions, utils::Range,
 };
-use crate::audio::MPlayerAudio;
+use crate::{audio::MPlayerAudio, utils::calculate_wait_from_rational};
 
 pub struct MPlayer {
+    sdl_context: Sdl,
     _sdl_video: VideoSubsystem,
     _initialized_at: Instant,
     sdl_event_pump: EventPump,
@@ -34,7 +35,9 @@ pub struct MPlayer {
     // will use in future to display some player stats like yt's stats for nerds
     _player_stats: MPlayerStats,
     clock: u128,
-    audio: MPlayerAudio,
+    audio: Option<MPlayerAudio>,
+    // Heartbeat
+    beat: Instant,
 }
 
 pub struct MPlayerStats {
@@ -49,11 +52,6 @@ pub static OPTS: MDecodeOptions = MDecodeOptions {
     look_range: Range { min: 10, max: 100 },
     window_default_size: (1920, 1080),
     pixel_format: ffmpeg_next::format::Pixel::RGB24,
-    audio_spec: AudioSpec {
-        freq: Some(44100/2),
-        channels: Some(2),
-        format: Some(AudioFormat::F32LE),
-    },
 };
 
 impl MPlayer {
@@ -64,6 +62,7 @@ impl MPlayer {
 
         let window =
             sdl3::video::WindowBuilder::new(&sdl_video, "MPlayer", WINDOW_WIDTH, WINDOW_HEIGHT)
+                .resizable()
                 .build()
                 .map_err(|_| MPlayerError::WindowCreationFailed)?;
 
@@ -87,6 +86,7 @@ impl MPlayer {
         let core = Arc::new(Mutex::new(MPlayerCore::new(Some(&OPTS))));
 
         Ok(MPlayer {
+            sdl_context: sdl_ctx,
             _sdl_video: sdl_video,
             sdl_event_pump,
             _initialized_at: Instant::now(),
@@ -98,7 +98,8 @@ impl MPlayer {
                 time_to_present: -1.0,
             },
             clock: 0,
-            audio: init_audio_subsystem(&sdl_ctx, &OPTS.audio_spec).unwrap(),
+            audio: None,
+            beat: Instant::now(),
         })
     }
     pub fn tick(&mut self, cli_command: Option<Command>) -> () {
@@ -108,18 +109,18 @@ impl MPlayer {
 
         // Check if there is an active decoder and obtains the frame
         if let Ok(lock) = &self.core.lock() {
-            //check if enough time has passed since the image was last displayed and displays it if necessary
-
             if let Some(video) = &lock.video {
                 if let Ok(ref mut frame) = video.output_rx.try_recv() {
-                    /*
-                    Sync code.. a bit later
-                    while let Ok(frame) = video.output_rx.recv() &&
-                    // We can safely unwrap since PTS is guaranteed to be assigned by the playback core.
-                    frame.pts().unwrap() > 0
-                    {}
-                     */
-                    println!("{}", frame.pts().unwrap());
+                    // /*
+                    // Sync code.. a bit later
+                    // */
+                    // while let Ok(frame) = video.output_rx.recv() &&
+                    // // We can safely unwrap since PTS is guaranteed to be assigned by the playback core.
+                    // frame.pts().unwrap() > 0
+                    // {}
+                    // if (self.beat.elapsed().as_nanos() > )
+
+                    // println!("[video] {}", frame.pts().unwrap());
                     let size = (frame.width(), frame.height());
                     if size != self.canvas.output_size().unwrap() {
                         let _ = self
@@ -150,9 +151,20 @@ impl MPlayer {
                 }
             }
 
-            if let Some(audio) = &lock.audio {
-                if let Ok(audio) = audio.output_rx.try_recv() {
-                    let _ = self.audio.tx.send(audio);
+            if let Some(thread) = &lock.audio {
+                if let Ok(frame) = thread.output_rx.try_recv() {
+                    // println!("[audio] {}", audio.pts().unwrap());
+                    if let Some(audio) = &self.audio {
+                        let _ = audio.tx.send(frame);
+                    } else {
+                        self.audio = Some(
+                            init_audio_subsystem(
+                                &self.sdl_context,
+                                thread.stream_info.spec.unwrap(),
+                            )
+                            .unwrap(),
+                        );
+                    }
                 }
             }
         }
@@ -181,6 +193,40 @@ impl MPlayer {
         }
     }
 
+    pub fn go(&mut self, commander: Receiver<Command>, tps: Rational) {
+        let (tick_tx, tick_rx) = channel::<()>();
+        let timer_t = thread::spawn(move || {
+            // Move the commander into the thread
+            let time_base = tps;
+            loop {
+                let _ = tick_tx.send(());
+                thread::sleep(Duration::from_nanos(calculate_wait_from_rational(
+                    time_base,
+                    crate::utils::TimeScale::Nano,
+                )));
+            }
+
+            // Tick tx will get dropped, closing the channel and killing threads
+        });
+        let mut tick_count = 0;
+        let mut timer = Instant::now();
+        while let Ok(_) = tick_rx.recv() {
+            if let Ok(command) = commander.try_recv() {
+                self.process_command(command);
+            }
+            self.tick(None);
+            tick_count += 1;
+            if timer.elapsed().as_secs_f32() > 2.0 {
+                println!(
+                    "[TPS] {}",
+                    tick_count as f32 / timer.elapsed().as_secs_f32()
+                );
+                tick_count = 0;
+                timer = Instant::now();
+            }
+        }
+        timer_t.join();
+    }
     // I will handle resize later...
     // fn handle_resize(&mut self, event: WindowEvent) -> () {
     //     if let WindowEvent::Resized(w, h) = event {}

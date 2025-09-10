@@ -1,6 +1,9 @@
+use std::sync::LazyLock;
+
 use ffmpeg_next::{
-    self as ffmpeg, Rational,
+    self as ffmpeg, Rational, Stream,
     codec::Context,
+    decoder::Audio,
     format::{Pixel, context::Input},
     media,
     software::{self, scaling::Flags},
@@ -149,13 +152,13 @@ pub enum RangeCheck {
 }
 
 pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> i64 {
-    // Time per frame (tpf) in time_base units: tpf = time_base.den / frame_rate
-    // time_base = (num, den), frame_rate = (num, den)
-    // tpf = (frame_rate.num * time_base.den) / (frame_rate.den * time_base.num)
     if time_base.0 == 0 || frame_rate.0 == 0 {
         return 0;
     }
-    (frame_rate.0 as i64 * time_base.1 as i64) / (frame_rate.1 as i64 * time_base.0 as i64)
+    let res = ((frame_rate.0 as i64 * time_base.1 as i64)
+        / (frame_rate.1 as i64 * time_base.0 as i64))
+        / (frame_rate.0 / frame_rate.1) as i64;
+    return res;
 }
 
 #[derive(Debug, Clone)]
@@ -165,7 +168,6 @@ pub struct MDecodeOptions {
     pub look_range: Range,
     pub window_default_size: (u32, u32),
     pub pixel_format: Pixel,
-    pub audio_spec: AudioSpec,
 }
 impl Default for MDecodeOptions {
     fn default() -> Self {
@@ -174,11 +176,6 @@ impl Default for MDecodeOptions {
             scaling_flag: Flags::BILINEAR,
             window_default_size: (1920, 1080),
             pixel_format: Pixel::RGB24,
-            audio_spec: AudioSpec {
-                freq: Some(22100),
-                channels: Some(2),
-                format: Some(AudioFormat::F32BE),
-            },
         }
     }
 }
@@ -238,4 +235,44 @@ impl MediaInfo {
             time_base: video_decoder.time_base(),
         }
     }
+}
+
+impl ConvFormat<AudioSpec> for Audio {
+    fn convert(&self) -> AudioSpec {
+        AudioSpec {
+            freq: Some((self.rate() as i32) / 2),
+            channels: Some(self.channel_layout().channels()),
+            format: Some(self.format().convert()),
+        }
+    }
+}
+trait Distance {
+    fn distance(&self, other: Self) -> Self;
+}
+impl Distance for i64 {
+    fn distance(&self, other: Self) -> Self {
+        (other - self).abs()
+    }
+}
+pub enum TimeScale {
+    Nano = 1_000_000,
+    Mili = 1_000,
+}
+pub fn calculate_wait_from_rational(time_base: Rational, scale: TimeScale) -> u64 {
+    // time_base = x/y seconds per unit (usually frame or tick)
+    // To get the duration of one unit in the desired scale:
+    // duration = (x / y) seconds * scale (e.g., 1_000_000_000 for ns)
+    // = (x * scale) / y
+    let scale_val = match scale {
+        TimeScale::Nano => 1_000_000_000,
+        TimeScale::Mili => 1_000,
+    };
+    if time_base.0 == 0 {
+        return 0;
+    }
+    ((time_base.0 as f64 * scale_val as f64) / time_base.1 as f64) as u64
+}
+
+pub fn time_base_to_ns(time_base: Rational) -> u32 {
+    ((1_000_000_000 * time_base.0) / time_base.1).abs() as u32
 }

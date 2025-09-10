@@ -1,8 +1,7 @@
 use ffmpeg_next::{
-    self as ffmpeg, Rational,
-    codec::{Context, Parameters},
-    frame::{Audio, Video},
+    self as ffmpeg, codec::{Context, Parameters}, frame::{Audio, Video}, media::Type, Rational
 };
+use sdl3::audio::AudioSpec;
 use std::{
     sync::{
         Arc, Mutex, RwLock,
@@ -15,8 +14,10 @@ use ffmpeg::{Packet, Stream, format::input};
 
 use crate::{
     constants::ConvFormat,
-    utils::{MDecodeOptions, MediaInfo},
-    utils::{calculate_tpf_from_time_base, height_from_ar, Range},
+    utils::{
+        MDecodeOptions, MediaInfo, Range, calculate_tpf_from_time_base, height_from_ar,
+        print_context_data,
+    },
 };
 
 pub struct MPlayerCore {
@@ -29,6 +30,7 @@ pub struct MPlayerCore {
     pub officer_he_has_a_gun: Option<SyncSender<PacketDistributorCommand>>,
     pub what_gun: Option<JoinHandle<()>>,
     pub has_media: bool,
+
 }
 
 pub enum MediaThreadCommand {
@@ -49,7 +51,6 @@ pub struct MediaThread {
     pub status: Arc<RwLock<MediaThreadStatus>>,
     handle: JoinHandle<()>,
 }
-
 
 pub enum PacketDistributorCommand {
     Exit,
@@ -86,8 +87,8 @@ impl MPlayerCore {
 
                     let mut video_tx = None;
                     let mut audio_tx = None;
-                    let mut video_marker = None;
-                    let mut audio_marker = None;
+                    let mut video_marker: Option<PacketMarker> = None;
+                    let mut audio_marker: Option<PacketMarker> = None;
                     if let Some(video_stream) =
                         input_ctx.streams().best(ffmpeg_next::media::Type::Video)
                     {
@@ -101,6 +102,7 @@ impl MPlayerCore {
                                 Some("video".to_string()),
                                 Some(ThreadConfig {
                                     buffer_capacity: 5,
+                                    time_base: video_stream.time_base(),
                                 }),
                                 Mutex::new(decode_options),
                             ));
@@ -121,6 +123,7 @@ impl MPlayerCore {
                                 Some("audio".to_string()),
                                 Some(ThreadConfig {
                                     buffer_capacity: 5,
+                                    time_base: audio_stream.time_base(),
                                 }),
                             ));
                             lock.has_media = true;
@@ -129,7 +132,7 @@ impl MPlayerCore {
 
                     // Instead of collecting all packets, process them one by one to reduce memory pressure
                     // stfu AI you're stupid as hell.
-
+                    let _ = print_context_data(&input_ctx);
                     while let Some((stream, packet)) = input_ctx.packets().next() {
                         if let Ok(command) = command_rx.try_recv() {
                             match command {
@@ -185,6 +188,7 @@ impl Default for ThreadConfig {
     fn default() -> Self {
         Self {
             buffer_capacity: 10,
+            time_base: Rational(0, 1),
         }
     }
 }
@@ -206,6 +210,7 @@ impl ConvFormat<PacketMarker> for Stream<'_> {
 #[derive(Clone, Copy)]
 pub struct ThreadConfig {
     buffer_capacity: u16,
+    time_base: Rational,
 }
 
 pub enum ThreadData {
@@ -216,16 +221,20 @@ pub enum ThreadData {
 pub struct DecodeThread<OutputType> {
     pub handle: JoinHandle<()>,
     pub output_rx: Receiver<OutputType>,
+    pub stream_info: StreamInfo
 }
-
-impl<T> DecodeThread<T> {
-    pub fn join(self) {
-        let _ = self.handle.join();
-    }
+pub struct StreamInfo {
+    pub time_base: Rational,
+    pub kind: Type,
+    pub fps: Option<Rational>,
+    pub spec: Option<AudioSpec>
 }
 
 
 impl DecodeThread<Video> {
+    pub fn join(self) {
+        let _ = self.handle.join();
+    }
     pub fn spawn(
         parameters: Parameters,
         packet_rx: Receiver<ThreadData>,
@@ -235,15 +244,18 @@ impl DecodeThread<Video> {
     ) -> DecodeThread<Video> {
         let config = config.unwrap_or_default();
         let (output_tx, output_rx) = mpsc::sync_channel(config.buffer_capacity.into());
-
+        let stream_info = parameters.convert();
         let handle = thread::Builder::new()
             .name(thread_name.unwrap_or("media".to_string()))
             .spawn(move || {
+                
                 let mut video_decoder = Context::from_parameters(parameters)
                     .unwrap()
                     .decoder()
                     .video()
                     .unwrap();
+
+
 
                 let scaling_config_;
                 {
@@ -265,16 +277,17 @@ impl DecodeThread<Video> {
                 );
 
                 let mut frame_buffer = Video::empty();
-                let counter = 0;
+                let mut counter = 0;
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
                     video_decoder.send_packet(&packet).unwrap();
                     if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
-                        if let None = frame_buffer.pts() {
-                            frame_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(video_decoder.time_base(), video_decoder.frame_rate().unwrap())));
-                        }                                
                         if let Ok(ref mut scaler) = scaling_context {
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
+                                if let None | Some(0) = output_buffer.pts() {
+                                    output_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(config.time_base, video_decoder.frame_rate().unwrap_or(Rational(0, 1)))));
+                                }
+                                counter+=1;
                                 let _ = output_tx.send(output_buffer);
                                 continue;
                             }
@@ -286,7 +299,8 @@ impl DecodeThread<Video> {
             .expect("Unable to spawn video thread, you may not have enough memory/cpu resource available.");
         DecodeThread {
             handle,
-            output_rx: output_rx,
+            output_rx,
+            stream_info
         }
     }
 }
@@ -300,7 +314,7 @@ impl DecodeThread<Audio> {
     ) -> DecodeThread<Audio> {
         let config = config.unwrap_or_default();
         let (output_tx, output_rx) = mpsc::sync_channel(config.buffer_capacity.into());
-
+        let stream_info = parameters.convert();
         let handle = thread::Builder::new()
             .name(thread_name.unwrap_or("media".to_string()))
             .spawn(move || {
@@ -309,6 +323,7 @@ impl DecodeThread<Audio> {
                     .decoder()
                     .audio()
                     .unwrap();
+
                 let mut frame_buffer = Audio::empty();
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
                     audio_decoder.send_packet(&packet).unwrap();
@@ -320,7 +335,8 @@ impl DecodeThread<Audio> {
             .expect("Unable to spawn media thread.");
         DecodeThread {
             handle,
-            output_rx: output_rx,
+            output_rx,
+            stream_info
         }
     }
 }
