@@ -24,7 +24,7 @@ use crate::{
 use crate::{audio::MPlayerAudio, utils::calculate_wait_from_rational};
 
 pub struct MPlayer {
-    sdl_context: Sdl,
+    sdl: Sdl,
     _sdl_video: VideoSubsystem,
     _initialized_at: Instant,
     sdl_event_pump: EventPump,
@@ -86,7 +86,7 @@ impl MPlayer {
         let core = Arc::new(Mutex::new(MPlayerCore::new(Some(&OPTS))));
 
         Ok(MPlayer {
-            sdl_context: sdl_ctx,
+            sdl: sdl_ctx,
             _sdl_video: sdl_video,
             sdl_event_pump,
             _initialized_at: Instant::now(),
@@ -158,11 +158,8 @@ impl MPlayer {
                         let _ = audio.tx.send(frame);
                     } else {
                         self.audio = Some(
-                            init_audio_subsystem(
-                                &self.sdl_context,
-                                thread.stream_info.spec.unwrap(),
-                            )
-                            .unwrap(),
+                            init_audio_subsystem(&self.sdl, thread.stream_info.spec.unwrap())
+                                .unwrap(),
                         );
                     }
                 }

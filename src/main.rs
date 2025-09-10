@@ -1,9 +1,7 @@
 use std::{
     io::{self, BufRead},
-    process::exit,
     sync::mpsc,
     thread,
-    time::{Duration, Instant},
 };
 
 use ffmpeg_next::Rational;
@@ -46,7 +44,7 @@ fn main() {
 
     match player {
         Ok(mut player) => {
-            player.go(rx, Rational(1, 100));
+            player.go(rx, Rational(1, 10000));
         }
         Err(err) => {
             println!("{:?}", err);

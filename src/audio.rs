@@ -1,17 +1,43 @@
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::{
+    ops::Div,
+    sync::mpsc::{self, Receiver, Sender},
+};
 
 use ffmpeg_next::frame::Audio;
 use sdl3::{
     Error, Sdl,
-    audio::{AudioCallback, AudioSpec, AudioStreamWithCallback},
+    audio::{AudioCallback, AudioFormatNum, AudioSpec, AudioStreamWithCallback},
 };
 
-pub fn init_audio_subsystem<'a>(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, Error> {
+pub fn init_audio_subsystem(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, Error> {
     let audio = sdl.audio()?;
     let (tx, rx) = mpsc::channel();
     let ctx = MPlayerAudioCallbackCtx::new(rx);
-    let device: sdl3::audio::AudioStreamWithCallback<MPlayerAudioCallbackCtx> =
-        audio.open_playback_stream(&spec, ctx).expect("");
+
+    let device = match spec.format {
+        Some(sdl3::audio::AudioFormat::S16LE) => {
+            audio.open_playback_stream::<MPlayerAudioCallbackCtx, i16>(&spec, ctx)?
+        }
+        Some(sdl3::audio::AudioFormat::S32LE) => {
+            audio.open_playback_stream::<MPlayerAudioCallbackCtx, i32>(&spec, ctx)?
+        }
+        Some(sdl3::audio::AudioFormat::F32LE) => {
+            let mut spec = spec;
+            if let Some(freq) = spec.freq {
+                let _ = spec.freq.insert(freq / 2);
+            }
+            audio.open_playback_stream::<MPlayerAudioCallbackCtx, f32>(&spec, ctx)?
+        }
+        Some(sdl3::audio::AudioFormat::U8) => {
+            audio.open_playback_stream::<MPlayerAudioCallbackCtx, u8>(&spec, ctx)?
+        }
+        Some(sdl3::audio::AudioFormat::S8) => {
+            audio.open_playback_stream::<MPlayerAudioCallbackCtx, i8>(&spec, ctx)?
+        }
+        _ => {
+            panic!("Unsupported audio format.");
+        }
+    };
     let _ = device.resume();
 
     let audio_sys = MPlayerAudio { tx, device: device };
@@ -34,7 +60,10 @@ impl MPlayerAudioCallbackCtx {
     }
 }
 
-impl AudioCallback<f32> for MPlayerAudioCallbackCtx {
+impl<T> AudioCallback<T> for MPlayerAudioCallbackCtx
+where
+    T: AudioFormatNum,
+{
     fn callback(&mut self, stream: &mut sdl3::audio::AudioStream, _: i32) {
         match self.recv.try_recv() {
             Ok(frame) => {
