@@ -256,6 +256,7 @@ impl DecodeThread<Video> {
                     .decoder()
                     .video()
                     .unwrap();
+                video_decoder.set_time_base(config.time_base);
 
 
 
@@ -277,7 +278,6 @@ impl DecodeThread<Video> {
                     ),
                     scaling_config.scaling_flag,
                 );
-
                 let mut frame_buffer = Video::empty();
                 let mut counter = 0;
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
@@ -286,13 +286,13 @@ impl DecodeThread<Video> {
                         if let Ok(ref mut scaler) = scaling_context {
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
-                                if let None = output_buffer.pts() {
-                                    output_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(config.time_base, video_decoder.frame_rate().unwrap_or(Rational(0, 1)))));
+                                if let Some(0) | None = output_buffer.pts() {
+                                    output_buffer.set_pts(Some((counter as f64 * calculate_tpf_from_time_base(video_decoder.time_base(), video_decoder.frame_rate().unwrap_or(Rational(0, 1)))) as i64));
                                 }
                                 counter+=1;
                                 let _ = output_tx.send(output_buffer);
-                                continue;
                             }
+                            continue;
                         }
                         let _ = output_tx.send(frame_buffer.clone());
                     }

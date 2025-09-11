@@ -151,14 +151,12 @@ pub enum RangeCheck {
     Higher,
 }
 
-pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> i64 {
+pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> f64 {
     if time_base.0 == 0 || frame_rate.0 == 0 {
-        return 0;
+        return 0.0;
     }
-    let res = ((frame_rate.0 as i64 * time_base.1 as i64)
-        / (frame_rate.1 as i64 * time_base.0 as i64))
-        / (frame_rate.0 / frame_rate.1) as i64;
-    return res;
+
+    (time_base.1 as f64 / time_base.0 as f64 / (frame_rate.0 as f64 / frame_rate.1 as f64))
 }
 
 #[derive(Debug, Clone)]
@@ -281,7 +279,7 @@ pub fn convert_pts(pts: i64, from_base: Rational, to_base: Rational) -> u32 {
     if pts == 0 {
         return 0;
     }
-    let res = (((from_base.0 / from_base.1) * pts as i32) / (to_base.0 / to_base.1)) as u32;
-    println!("{}", res);
+    let res = from_base / to_base;
+    let res = ((pts as f64 * res.0 as f64) / res.1 as f64) as u32;
     res
 }

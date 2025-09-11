@@ -53,6 +53,8 @@ pub struct MPlayer {
 
 pub struct MPlayerStats {
     time_to_present: f32,
+    frame_count: u16,
+    frame_count_instant: Instant,
 }
 
 const WINDOW_WIDTH: u32 = 100;
@@ -107,6 +109,8 @@ impl MPlayer {
             video_texture,
             _player_stats: MPlayerStats {
                 time_to_present: -1.0,
+                frame_count: 0,
+                frame_count_instant: Instant::now(),
             },
             clock: 0,
             audio: None,
@@ -130,14 +134,16 @@ impl MPlayer {
                     self.clock += hasnt_ticket_for.as_nanos()
                         / time_base_to_ns(Rational(1, self.player_frequency));
                     self.beat = Instant::now();
-                    println!("{}", self.clock);
+                    // println!("{}", self.clock);
                 }
 
                 if let Some(ref mut buff) = self.internal_buff_v {
-                    if buff.len() < 5 {
+                    if buff.len() < 10 {
                         if let Ok(frame) = video.output_rx.try_recv() {
                             buff.push_back(frame);
                         }
+                    } else {
+                        // println!("buffer cap reached");
                     }
                 } else {
                     self.internal_buff_v = Some(VecDeque::new());
@@ -146,17 +152,38 @@ impl MPlayer {
                     && let Some(frame) = buff.front()
                     && let Some(pts) = frame.pts()
                 {
-                    println!("pts {}", pts);
-                    if convert_pts(
+                    if pts == 0 {
+                        self.clock = 0;
+                    }
+                    if (convert_pts(
                         pts,
                         video.stream_info.time_base,
                         Rational(1, self.player_frequency),
-                    ) as u128
-                        > self.clock
+                    ) as u128)
+                        <= self.clock
                         && let Some(ref mut frame) = buff.pop_front()
                     {
-
-
+                        self._player_stats.frame_count += 1;
+                        if self
+                            ._player_stats
+                            .frame_count_instant
+                            .elapsed()
+                            .as_secs_f64()
+                            > 1.0
+                        {
+                            println!("fps: {}", self._player_stats.frame_count);
+                            self._player_stats.frame_count_instant = Instant::now();
+                            self._player_stats.frame_count = 0;
+                        }
+                        println!(
+                            "tick: stream_pts {} player_timer {}",
+                            convert_pts(
+                                pts,
+                                video.stream_info.time_base,
+                                Rational(1, self.player_frequency),
+                            ),
+                            self.clock
+                        );
                         // println!("[video] {}", frame.pts().unwrap());
                         let size = (frame.width(), frame.height());
                         if size != self.canvas.output_size().unwrap() {
@@ -223,6 +250,7 @@ impl MPlayer {
             }
             Command::Play(path) => {
                 MPlayerCore::open_media(path, Some(OPTS.clone()), Arc::clone(&self.core));
+                self.beat = Instant::now();
             }
             _ => {}
         }
