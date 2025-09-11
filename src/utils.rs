@@ -273,6 +273,15 @@ pub fn calculate_wait_from_rational(time_base: Rational, scale: TimeScale) -> u6
     ((time_base.0 as f64 * scale_val as f64) / time_base.1 as f64) as u64
 }
 
-pub fn time_base_to_ns(time_base: Rational) -> u32 {
-    ((1_000_000_000 * time_base.0) / time_base.1).abs() as u32
+pub fn time_base_to_ns(time_base: Rational) -> u128 {
+    ((1_000_000_000 * time_base.0) / time_base.1).abs() as u128
+}
+
+pub fn convert_pts(pts: i64, from_base: Rational, to_base: Rational) -> u32 {
+    if pts == 0 {
+        return 0;
+    }
+    let res = (((from_base.0 / from_base.1) * pts as i32) / (to_base.0 / to_base.1)) as u32;
+    println!("{}", res);
+    res
 }

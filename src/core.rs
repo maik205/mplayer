@@ -96,7 +96,7 @@ impl MPlayerCore {
                         video_tx = Some(p_tx_video);
                         video_marker = Some(video_stream.convert());
                         if let Ok(mut lock) = mutex.lock() {
-                            lock.video = Some(DecodeThread::<Video>::spawn(
+                            let mut v = Some(DecodeThread::<Video>::spawn(
                                 video_stream.parameters(),
                                 p_rx_video,
                                 Some("video".to_string()),
@@ -105,7 +105,9 @@ impl MPlayerCore {
                                     time_base: video_stream.time_base(),
                                 }),
                                 Mutex::new(decode_options),
-                            ));
+                            )).unwrap();
+                            v.stream_info = video_stream.convert();
+                            lock.video = Some(v);
                             lock.has_media = true;
                         }
                     }
@@ -284,7 +286,7 @@ impl DecodeThread<Video> {
                         if let Ok(ref mut scaler) = scaling_context {
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
-                                if let None | Some(0) = output_buffer.pts() {
+                                if let None = output_buffer.pts() {
                                     output_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(config.time_base, video_decoder.frame_rate().unwrap_or(Rational(0, 1)))));
                                 }
                                 counter+=1;

@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{
         Arc, LazyLock, Mutex, RwLock,
         mpsc::{Receiver, channel},
@@ -7,7 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ffmpeg_next::{Rational, software::scaling::Flags};
+use ffmpeg_next::{
+    Rational,
+    frame::{Audio, Video},
+    software::scaling::Flags,
+};
 use sdl3::{
     EventPump, Sdl, VideoSubsystem,
     audio::{AudioFormat, AudioSpec},
@@ -18,8 +23,11 @@ use sdl3::{
 };
 
 use crate::{
-    Command, audio::init_audio_subsystem, constants::ConvFormat, core::MPlayerCore,
-    utils::MDecodeOptions, utils::Range,
+    Command,
+    audio::init_audio_subsystem,
+    constants::ConvFormat,
+    core::MPlayerCore,
+    utils::{MDecodeOptions, Range, convert_pts, time_base_to_ns},
 };
 use crate::{audio::MPlayerAudio, utils::calculate_wait_from_rational};
 
@@ -38,6 +46,9 @@ pub struct MPlayer {
     audio: Option<MPlayerAudio>,
     // Heartbeat
     beat: Instant,
+    pub player_frequency: i32,
+    internal_buff_v: Option<VecDeque<Video>>,
+    internal_buff_a: Option<VecDeque<Audio>>,
 }
 
 pub struct MPlayerStats {
@@ -100,6 +111,9 @@ impl MPlayer {
             clock: 0,
             audio: None,
             beat: Instant::now(),
+            player_frequency: 10000,
+            internal_buff_a: None,
+            internal_buff_v: None,
         })
     }
     pub fn tick(&mut self, cli_command: Option<Command>) -> () {
@@ -110,44 +124,68 @@ impl MPlayer {
         // Check if there is an active decoder and obtains the frame
         if let Ok(lock) = &self.core.lock() {
             if let Some(video) = &lock.video {
-                if let Ok(ref mut frame) = video.output_rx.try_recv() {
-                    // /*
-                    // Sync code.. a bit later
-                    // */
-                    // while let Ok(frame) = video.output_rx.recv() &&
-                    // // We can safely unwrap since PTS is guaranteed to be assigned by the playback core.
-                    // frame.pts().unwrap() > 0
-                    // {}
-                    // if (self.beat.elapsed().as_nanos() > )
+                let hasnt_ticket_for = self.beat.elapsed();
+                if hasnt_ticket_for.as_nanos() > time_base_to_ns(Rational(1, self.player_frequency))
+                {
+                    self.clock += hasnt_ticket_for.as_nanos()
+                        / time_base_to_ns(Rational(1, self.player_frequency));
+                    self.beat = Instant::now();
+                    println!("{}", self.clock);
+                }
 
-                    // println!("[video] {}", frame.pts().unwrap());
-                    let size = (frame.width(), frame.height());
-                    if size != self.canvas.output_size().unwrap() {
-                        let _ = self
-                            .canvas
-                            .window_mut()
-                            .set_size(frame.width(), frame.height());
-                        self.video_texture = self
-                            .canvas
-                            .texture_creator()
-                            .create_texture_streaming(
-                                Some(frame.format().convert().into()),
-                                size.0,
-                                size.1,
-                            )
-                            .unwrap();
+                if let Some(ref mut buff) = self.internal_buff_v {
+                    if buff.len() < 5 {
+                        if let Ok(frame) = video.output_rx.try_recv() {
+                            buff.push_back(frame);
+                        }
                     }
+                } else {
+                    self.internal_buff_v = Some(VecDeque::new());
+                }
+                if let Some(ref mut buff) = self.internal_buff_v
+                    && let Some(frame) = buff.front()
+                    && let Some(pts) = frame.pts()
+                {
+                    println!("pts {}", pts);
+                    if convert_pts(
+                        pts,
+                        video.stream_info.time_base,
+                        Rational(1, self.player_frequency),
+                    ) as u128
+                        > self.clock
+                        && let Some(ref mut frame) = buff.pop_front()
+                    {
 
-                    let _ =
-                        self.video_texture
-                            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+
+                        // println!("[video] {}", frame.pts().unwrap());
+                        let size = (frame.width(), frame.height());
+                        if size != self.canvas.output_size().unwrap() {
+                            let _ = self
+                                .canvas
+                                .window_mut()
+                                .set_size(frame.width(), frame.height());
+                            self.video_texture = self
+                                .canvas
+                                .texture_creator()
+                                .create_texture_streaming(
+                                    Some(frame.format().convert().into()),
+                                    size.0,
+                                    size.1,
+                                )
+                                .unwrap();
+                        }
+                        let _ = self.video_texture.with_lock(
+                            None,
+                            |buffer: &mut [u8], _pitch: usize| {
                                 let frame_data = frame.data_mut(0);
                                 buffer.swap_with_slice(frame_data);
-                            });
+                            },
+                        );
 
-                    self.canvas.clear();
-                    let _ = self.canvas.copy(&self.video_texture, None, None);
-                    self.canvas.present();
+                        self.canvas.clear();
+                        let _ = self.canvas.copy(&self.video_texture, None, None);
+                        self.canvas.present();
+                    }
                 }
             }
 
@@ -190,15 +228,16 @@ impl MPlayer {
         }
     }
 
-    pub fn go(&mut self, commander: Receiver<Command>, tps: Rational) {
+    pub fn go(&mut self, commander: Receiver<Command>, tps: i32) {
         let (tick_tx, tick_rx) = channel::<()>();
+        self.player_frequency = tps;
         let timer_t = thread::spawn(move || {
             // Move the commander into the thread
-            let time_base = tps;
+
             loop {
                 let _ = tick_tx.send(());
                 thread::sleep(Duration::from_nanos(calculate_wait_from_rational(
-                    time_base,
+                    Rational(1, tps),
                     crate::utils::TimeScale::Nano,
                 )));
             }
@@ -222,7 +261,7 @@ impl MPlayer {
                 timer = Instant::now();
             }
         }
-        timer_t.join();
+        let _ = timer_t.join();
     }
     // I will handle resize later...
     // fn handle_resize(&mut self, event: WindowEvent) -> () {

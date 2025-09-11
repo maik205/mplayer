@@ -44,7 +44,7 @@ fn main() {
 
     match player {
         Ok(mut player) => {
-            player.go(rx, Rational(1, 10000));
+            player.go(rx, 10000);
         }
         Err(err) => {
             println!("{:?}", err);
