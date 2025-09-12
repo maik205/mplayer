@@ -151,12 +151,13 @@ pub enum RangeCheck {
     Higher,
 }
 
-pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> f64 {
+pub fn calculate_tpf_from_time_base(time_base: Rational, frame_rate: Rational) -> f32 {
     if time_base.0 == 0 || frame_rate.0 == 0 {
         return 0.0;
     }
-
-    (time_base.1 as f64 / time_base.0 as f64 / (frame_rate.0 as f64 / frame_rate.1 as f64))
+    let sec_val = time_base.invert();
+    let res = sec_val / frame_rate;
+    return res.0 as f32 / res.1 as f32;
 }
 
 #[derive(Debug, Clone)]

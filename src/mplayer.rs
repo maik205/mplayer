@@ -42,7 +42,7 @@ pub struct MPlayer {
     video_texture: Texture,
     // will use in future to display some player stats like yt's stats for nerds
     _player_stats: MPlayerStats,
-    clock: u128,
+    clock: f64,
     audio: Option<MPlayerAudio>,
     // Heartbeat
     beat: Instant,
@@ -112,7 +112,7 @@ impl MPlayer {
                 frame_count: 0,
                 frame_count_instant: Instant::now(),
             },
-            clock: 0,
+            clock: 0.0,
             audio: None,
             beat: Instant::now(),
             player_frequency: 10000,
@@ -125,18 +125,16 @@ impl MPlayer {
             self.process_command(command);
         }
 
+        let hasnt_ticket_for = self.beat.elapsed();
+        if hasnt_ticket_for.as_nanos() > time_base_to_ns(Rational(1, self.player_frequency)) {
+            self.clock += hasnt_ticket_for.as_nanos() as f64
+                / time_base_to_ns(Rational(1, self.player_frequency)) as f64;
+            self.beat = Instant::now();
+            // println!("{}", self.clock);
+        }
         // Check if there is an active decoder and obtains the frame
         if let Ok(lock) = &self.core.lock() {
             if let Some(video) = &lock.video {
-                let hasnt_ticket_for = self.beat.elapsed();
-                if hasnt_ticket_for.as_nanos() > time_base_to_ns(Rational(1, self.player_frequency))
-                {
-                    self.clock += hasnt_ticket_for.as_nanos()
-                        / time_base_to_ns(Rational(1, self.player_frequency));
-                    self.beat = Instant::now();
-                    // println!("{}", self.clock);
-                }
-
                 if let Some(ref mut buff) = self.internal_buff_v {
                     if buff.len() < 10 {
                         if let Ok(frame) = video.output_rx.try_recv() {
@@ -153,13 +151,13 @@ impl MPlayer {
                     && let Some(pts) = frame.pts()
                 {
                     if pts == 0 {
-                        self.clock = 0;
+                        self.clock = 0.0;
                     }
                     if (convert_pts(
                         pts,
                         video.stream_info.time_base,
                         Rational(1, self.player_frequency),
-                    ) as u128)
+                    ) as f64)
                         <= self.clock
                         && let Some(ref mut frame) = buff.pop_front()
                     {
@@ -175,7 +173,7 @@ impl MPlayer {
                             self._player_stats.frame_count_instant = Instant::now();
                             self._player_stats.frame_count = 0;
                         }
-                        println!(
+                        print!(
                             "tick: stream_pts {} player_timer {}",
                             convert_pts(
                                 pts,
@@ -201,13 +199,10 @@ impl MPlayer {
                                 )
                                 .unwrap();
                         }
-                        let _ = self.video_texture.with_lock(
-                            None,
-                            |buffer: &mut [u8], _pitch: usize| {
-                                let frame_data = frame.data_mut(0);
-                                buffer.swap_with_slice(frame_data);
-                            },
-                        );
+                        let _ = self.video_texture.with_lock(None, |buffer: &mut [u8], _| {
+                            let frame_data = frame.data_mut(0);
+                            buffer.swap_with_slice(frame_data);
+                        });
 
                         self.canvas.clear();
                         let _ = self.canvas.copy(&self.video_texture, None, None);
@@ -217,15 +212,48 @@ impl MPlayer {
             }
 
             if let Some(thread) = &lock.audio {
-                if let Ok(frame) = thread.output_rx.try_recv() {
-                    // println!("[audio] {}", audio.pts().unwrap());
-                    if let Some(audio) = &self.audio {
-                        let _ = audio.tx.send(frame);
+                if let Some(ref mut buff) = self.internal_buff_a {
+                    if buff.len() < 10 {
+                        if let Ok(frame) = thread.output_rx.try_recv() {
+                            buff.push_back(frame);
+                        }
                     } else {
-                        self.audio = Some(
-                            init_audio_subsystem(&self.sdl, thread.stream_info.spec.unwrap())
-                                .unwrap(),
+                        // println!("buffer cap reached");
+                    }
+                } else {
+                    self.internal_buff_a = Some(VecDeque::new());
+                }
+                if let Some(ref mut buff) = self.internal_buff_a
+                    && let Some(frame) = buff.front()
+                    && let Some(pts) = frame.pts()
+                {
+                    if pts == 0 {
+                        self.clock = 0.0;
+                    }
+                    if (convert_pts(
+                        pts,
+                        thread.stream_info.time_base,
+                        Rational(1, self.player_frequency),
+                    ) as f64)
+                        <= self.clock
+                        && let Some(frame) = buff.pop_front()
+                    {
+                        print!(
+                            "audio_pts {} \n",
+                            convert_pts(
+                                pts,
+                                thread.stream_info.time_base,
+                                Rational(1, self.player_frequency),
+                            )
                         );
+                        if let Some(audio) = &self.audio {
+                            let _ = audio.tx.send(frame);
+                        } else {
+                            self.audio = Some(
+                                init_audio_subsystem(&self.sdl, thread.stream_info.spec.unwrap())
+                                    .unwrap(),
+                            );
+                        }
                     }
                 }
             }
@@ -236,6 +264,16 @@ impl MPlayer {
                 Event::Quit { .. } => {
                     self.should_exit = true;
                 }
+                Event::Window {
+                    timestamp,
+                    window_id,
+                    win_event,
+                } => match win_event {
+                    sdl3::event::WindowEvent::Resized(w, h) => {
+                        self.beat = Instant::now();
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
