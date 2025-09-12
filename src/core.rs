@@ -92,20 +92,22 @@ impl MPlayerCore {
                     if let Some(video_stream) =
                         input_ctx.streams().best(ffmpeg_next::media::Type::Video)
                     {
-                        let (p_tx_video, p_rx_video) = mpsc::sync_channel(20);
+                        let (p_tx_video, p_rx_video) = mpsc::sync_channel(1000);
                         video_tx = Some(p_tx_video);
                         video_marker = Some(video_stream.convert());
                         if let Ok(mut lock) = mutex.lock() {
-                            lock.video = Some(DecodeThread::<Video>::spawn(
+                            let mut v = Some(DecodeThread::<Video>::spawn(
                                 video_stream.parameters(),
                                 p_rx_video,
                                 Some("video".to_string()),
                                 Some(ThreadConfig {
-                                    buffer_capacity: 5,
+                                    buffer_capacity: 24,
                                     time_base: video_stream.time_base(),
                                 }),
                                 Mutex::new(decode_options),
-                            ));
+                            )).unwrap();
+                            v.stream_info = video_stream.convert();
+                            lock.video = Some(v);
                             lock.has_media = true;
                         }
                     }
@@ -113,19 +115,21 @@ impl MPlayerCore {
                     if let Some(audio_stream) =
                         input_ctx.streams().best(ffmpeg_next::media::Type::Audio)
                     {
-                        let (p_tx_audio, p_rx_audio) = mpsc::sync_channel(20);
+                        let (p_tx_audio, p_rx_audio) = mpsc::sync_channel(1000);
                         audio_marker = Some(audio_stream.convert());
                         audio_tx = Some(p_tx_audio);
                         if let Ok(mut lock) = mutex.lock() {
-                            lock.audio = Some(DecodeThread::<Audio>::spawn(
+                            let mut a = DecodeThread::<Audio>::spawn(
                                 audio_stream.parameters(),
                                 p_rx_audio,
                                 Some("audio".to_string()),
                                 Some(ThreadConfig {
-                                    buffer_capacity: 5,
+                                    buffer_capacity: 44100,
                                     time_base: audio_stream.time_base(),
                                 }),
-                            ));
+                            );
+                            a.stream_info = audio_stream.convert();
+                            lock.audio = Some(a);
                             lock.has_media = true;
                         }
                     }
@@ -254,6 +258,7 @@ impl DecodeThread<Video> {
                     .decoder()
                     .video()
                     .unwrap();
+                video_decoder.set_time_base(config.time_base);
 
 
 
@@ -275,7 +280,6 @@ impl DecodeThread<Video> {
                     ),
                     scaling_config.scaling_flag,
                 );
-
                 let mut frame_buffer = Video::empty();
                 let mut counter = 0;
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
@@ -284,13 +288,16 @@ impl DecodeThread<Video> {
                         if let Ok(ref mut scaler) = scaling_context {
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
-                                if let None | Some(0) = output_buffer.pts() {
-                                    output_buffer.set_pts(Some(counter * calculate_tpf_from_time_base(config.time_base, video_decoder.frame_rate().unwrap_or(Rational(0, 1)))));
+                                if let Some(0) | None = output_buffer.pts() {
+                                    output_buffer.set_pts(Some(
+                                        (counter as f32  *
+                                         calculate_tpf_from_time_base(video_decoder.time_base(),
+                                          video_decoder.frame_rate().unwrap_or(Rational(0, 1)))) as i64));
                                 }
                                 counter+=1;
                                 let _ = output_tx.send(output_buffer);
-                                continue;
                             }
+                            continue;
                         }
                         let _ = output_tx.send(frame_buffer.clone());
                     }
