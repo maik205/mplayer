@@ -48,7 +48,9 @@ cargo build --release
 ### Run
 
 ```sh
-cargo run -- path/to/media/file.mp4
+> cargo run
+
+> open <path or URL to media>
 ```
 
 ---
