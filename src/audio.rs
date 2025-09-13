@@ -1,6 +1,6 @@
 use std::{
     ops::Div,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver, Sender, SyncSender},
 };
 
 use ffmpeg_next::frame::Audio;
@@ -11,7 +11,7 @@ use sdl3::{
 
 pub fn init_audio_subsystem(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, Error> {
     let audio = sdl.audio()?;
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(50);
     let ctx = MPlayerAudioCallbackCtx::new(rx);
 
     let device = match spec.format {
@@ -46,7 +46,7 @@ pub fn init_audio_subsystem(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, 
 }
 
 pub struct MPlayerAudio {
-    pub tx: Sender<Audio>,
+    pub tx: SyncSender<Audio>,
     pub device: AudioStreamWithCallback<MPlayerAudioCallbackCtx>,
 }
 

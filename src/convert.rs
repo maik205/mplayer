@@ -15,12 +15,15 @@ impl ConvFormat<StreamInfo> for Stream<'_> {
             ffmpeg_next::media::Type::Video => {
                 if let Ok(video) = codec.decoder().video() {
                     fps = video.frame_rate();
+                    if let None = fps {
+                        fps = Some(self.rate());
+                    }
                 }
             }
             ffmpeg_next::media::Type::Audio => {
                 if let Ok(audio) = codec.decoder().audio() {
                     spec = Some(AudioSpec {
-                        freq: Some(audio.rate() as i32 ),
+                        freq: Some(audio.rate() as i32),
                         channels: Some(audio.channel_layout().channels()),
                         format: Some(audio.format().convert()),
                     })
@@ -54,7 +57,7 @@ impl ConvFormat<StreamInfo> for Parameters {
                 if let Ok(audio) = codec.decoder().audio() {
                     spec = Some(AudioSpec {
                         freq: Some(audio.rate() as i32),
-                        channels: Some(audio.channel_layout().channels()),
+                        channels: Some(audio.channels() as i32),
                         format: Some(audio.format().convert()),
                     })
                 }

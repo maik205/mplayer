@@ -6,7 +6,7 @@ use std::{
 
 use ffmpeg_next::Rational;
 
-use crate::mplayer::MPlayer;
+use crate::{mplayer::MPlayer, utils::clear_screen};
 
 mod audio;
 mod constants;
@@ -34,6 +34,9 @@ fn main() {
                                 dir.replace("\"", "").replace("'", "").trim(),
                             )));
                         }
+                    }
+                    "clr" => {
+                        clear_screen();
                     }
                     _ => {}
                 }

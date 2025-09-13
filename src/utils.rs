@@ -134,7 +134,7 @@ pub fn height_from_ar(aspect_ratio: Rational, width: u32) -> u32 {
 }
 
 pub fn width_from_ar(aspect_ratio: Rational, height: u32) -> u32 {
-    return height * aspect_ratio.1 as u32 / aspect_ratio.0 as u32;
+    return height * aspect_ratio.0 as u32 / aspect_ratio.1 as u32;
 }
 
 pub fn frame_time_ms(rate: Rational) -> i32 {
@@ -173,7 +173,7 @@ impl Default for MDecodeOptions {
         MDecodeOptions {
             look_range: Range::new(5, 15),
             scaling_flag: Flags::BILINEAR,
-            window_default_size: (1920, 1080),
+            window_default_size: (1280, 720),
             pixel_format: Pixel::RGB24,
         }
     }
@@ -281,6 +281,18 @@ pub fn convert_pts(pts: i64, from_base: Rational, to_base: Rational) -> u32 {
         return 0;
     }
     let res = from_base / to_base;
-    let res = ((pts as f64 * res.0 as f64) / res.1 as f64) as u32;
-    res
+
+    ((pts as f64 * res.0 as f64) / res.1 as f64) as u32
+}
+
+pub fn move_terminal_cursor(x: u32, y: u32) {
+    // print!("{esc}[{};{}H", y, x, esc = 27 as char,);
+}
+
+pub fn print_at_line(text: String, x: u32, y: u32) {
+    // print!("{esc}[{};{}H{}", y, x, text, esc = 27 as char);
+}
+
+pub fn clear_screen() {
+    // print!("{}[2J", 27 as char);
 }

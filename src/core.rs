@@ -15,8 +15,7 @@ use ffmpeg::{Packet, Stream, format::input};
 use crate::{
     constants::ConvFormat,
     utils::{
-        MDecodeOptions, MediaInfo, Range, calculate_tpf_from_time_base, height_from_ar,
-        print_context_data,
+        calculate_tpf_from_time_base, height_from_ar, print_context_data, width_from_ar, MDecodeOptions, MediaInfo, Range
     },
 };
 
@@ -84,7 +83,7 @@ impl MPlayerCore {
             .spawn(move || {
                 if let Ok(mut input_ctx) = input(&path) {
                     let decode_options = decode_options.unwrap_or_default();
-
+                    let _ =print_context_data(&input_ctx);
                     let mut video_tx = None;
                     let mut audio_tx = None;
                     let mut video_marker: Option<PacketMarker> = None;
@@ -97,7 +96,7 @@ impl MPlayerCore {
                         video_marker = Some(video_stream.convert());
                         if let Ok(mut lock) = mutex.lock() {
                             let mut v = Some(DecodeThread::<Video>::spawn(
-                                video_stream.parameters(),
+                                &video_stream,
                                 p_rx_video,
                                 Some("video".to_string()),
                                 Some(ThreadConfig {
@@ -124,7 +123,7 @@ impl MPlayerCore {
                                 p_rx_audio,
                                 Some("audio".to_string()),
                                 Some(ThreadConfig {
-                                    buffer_capacity: 44100,
+                                    buffer_capacity: 40,
                                     time_base: audio_stream.time_base(),
                                 }),
                             );
@@ -134,9 +133,6 @@ impl MPlayerCore {
                         }
                     }
 
-                    // Instead of collecting all packets, process them one by one to reduce memory pressure
-                    // stfu AI you're stupid as hell.
-                    let _ = print_context_data(&input_ctx);
                     while let Some((stream, packet)) = input_ctx.packets().next() {
                         if let Ok(command) = command_rx.try_recv() {
                             match command {
@@ -156,6 +152,7 @@ impl MPlayerCore {
                                     if let Some(ref mut audio_tx) = audio_tx {
                                         let _ = audio_tx.send(ThreadData::Kill);
                                     }
+                                    
                                     break;
                                 }
                             }
@@ -227,6 +224,8 @@ pub struct DecodeThread<OutputType> {
     pub output_rx: Receiver<OutputType>,
     pub stream_info: StreamInfo
 }
+
+#[derive(Debug, Clone, Copy)]
 pub struct StreamInfo {
     pub time_base: Rational,
     pub kind: Type,
@@ -240,7 +239,7 @@ impl DecodeThread<Video> {
         let _ = self.handle.join();
     }
     pub fn spawn(
-        parameters: Parameters,
+        stream: &Stream<'_>,
         packet_rx: Receiver<ThreadData>,
         thread_name: Option<String>,
         config: Option<ThreadConfig>,
@@ -248,7 +247,9 @@ impl DecodeThread<Video> {
     ) -> DecodeThread<Video> {
         let config = config.unwrap_or_default();
         let (output_tx, output_rx) = mpsc::sync_channel(config.buffer_capacity.into());
-        let stream_info = parameters.convert();
+        let stream_info: StreamInfo = stream.convert();
+        let c_stream_info = stream_info.clone();
+        let parameters= stream.parameters();
         let handle = thread::Builder::new()
             .name(thread_name.unwrap_or("media".to_string()))
             .spawn(move || {
@@ -258,8 +259,10 @@ impl DecodeThread<Video> {
                     .decoder()
                     .video()
                     .unwrap();
-                video_decoder.set_time_base(config.time_base);
-
+                if let Rational(0,1) = video_decoder.time_base() {
+                    video_decoder.set_time_base(config.time_base);
+                }
+                let c_stream_info = c_stream_info;
 
 
                 let scaling_config_;
@@ -273,11 +276,9 @@ impl DecodeThread<Video> {
                     video_decoder.width(),
                     video_decoder.height(),
                     scaling_config.pixel_format,
-                    scaling_config.window_default_size.0,
-                    height_from_ar(
-                        Rational(video_decoder.width() as i32, video_decoder.height() as i32),
-                        scaling_config.window_default_size.0,
-                    ),
+                    width_from_ar(Rational(video_decoder.width() as i32, video_decoder.height() as i32),
+                     scaling_config.window_default_size.1),
+                     scaling_config.window_default_size.1,
                     scaling_config.scaling_flag,
                 );
                 let mut frame_buffer = Video::empty();
@@ -286,17 +287,19 @@ impl DecodeThread<Video> {
                     video_decoder.send_packet(&packet).unwrap();
                     if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
                         if let Ok(ref mut scaler) = scaling_context {
+
                             let mut output_buffer = Video::empty();
                             if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
                                 if let Some(0) | None = output_buffer.pts() {
                                     output_buffer.set_pts(Some(
                                         (counter as f32  *
                                          calculate_tpf_from_time_base(video_decoder.time_base(),
-                                          video_decoder.frame_rate().unwrap_or(Rational(0, 1)))) as i64));
+                                          video_decoder.frame_rate().unwrap_or(c_stream_info.fps.unwrap()))) as i64));
                                 }
                                 counter+=1;
                                 let _ = output_tx.send(output_buffer);
                             }
+                            
                             continue;
                         }
                         let _ = output_tx.send(frame_buffer.clone());
