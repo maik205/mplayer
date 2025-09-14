@@ -174,7 +174,7 @@ impl Default for MDecodeOptions {
             look_range: Range::new(5, 15),
             scaling_flag: Flags::BILINEAR,
             window_default_size: (1280, 720),
-            pixel_format: Pixel::RGB24,
+            pixel_format: Pixel::RGBA,
         }
     }
 }
@@ -286,13 +286,13 @@ pub fn convert_pts(pts: i64, from_base: Rational, to_base: Rational) -> u32 {
 }
 
 pub fn move_terminal_cursor(x: u32, y: u32) {
-    // print!("{esc}[{};{}H", y, x, esc = 27 as char,);
+    print!("{esc}[{};{}H", y, x, esc = 27 as char,);
 }
 
 pub fn print_at_line(text: String, x: u32, y: u32) {
-    // print!("{esc}[{};{}H{}", y, x, text, esc = 27 as char);
+    print!("{esc}[{};{}H{}", y, x, text, esc = 27 as char);
 }
 
 pub fn clear_screen() {
-    // print!("{}[2J", 27 as char);
+    print!("{}[2J", 27 as char);
 }

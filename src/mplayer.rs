@@ -1,11 +1,7 @@
 use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, LazyLock, Mutex, RwLock,
-        mpsc::{Receiver, channel},
-    },
-    thread,
-    time::{Duration, Instant},
+    collections::VecDeque, process, sync::{
+        mpsc::{channel, Receiver}, Arc, LazyLock, Mutex, RwLock
+    }, thread, time::{Duration, Instant}
 };
 
 use ffmpeg_next::{
@@ -129,6 +125,8 @@ impl MPlayer {
         }
         // Check if there is an active decoder and obtains the frame
         if let Ok(lock) = &self.core.lock() {
+
+            // Clock
             if lock.has_media {
                 let hasnt_ticket_for = self.beat.elapsed();
                 if hasnt_ticket_for.as_nanos() > time_base_to_ns(Rational(1, self.player_frequency))
@@ -139,18 +137,19 @@ impl MPlayer {
                     print_at_line(format!("clock: {}", self.clock,), 0, 0);
                 }
             }
+
+            // Handle video
             if let Some(video) = &lock.video {
                 if let Some(ref mut buff) = self.internal_buff_v {
                     if buff.len() < 10 {
                         if let Ok(frame) = video.output_rx.try_recv() {
                             buff.push_back(frame);
                         }
-                    } else {
-                        // println!("buffer cap reached");
                     }
                 } else {
                     self.internal_buff_v = Some(VecDeque::new());
                 }
+                
                 if let Some(ref mut buff) = self.internal_buff_v
                     && let Some(frame) = buff.front()
                     && let Some(pts) = frame.pts()
@@ -207,94 +206,15 @@ impl MPlayer {
                                     size.1,
                                 )
                                 .unwrap();
+                            print_at_line("resized".to_string(), 0, 10);
                         }
                         let _ = self.video_texture.with_lock(None, |buffer: &mut [u8], _| {
                             let frame_data = frame.data_mut(0);
+                            print_at_line(format!("wrote {} bytes.", buffer.len()), 0, 8);
                             buffer.swap_with_slice(frame_data);
                         });
-
-                        // println!("[video] {}", frame.pts().unwrap());
-                        let size = (frame.width(), frame.height());
-                        if size != self.canvas.output_size().unwrap() {
-                            let _ = self
-                                .canvas
-                                .window_mut()
-                                .set_size(frame.width(), frame.height());
-                            self.video_texture = self
-                                .canvas
-                                .texture_creator()
-                                .create_texture_streaming(
-                                    Some(frame.format().convert().into()),
-                                    size.0,
-                                    size.1,
-                                )
-                                .unwrap();
-                        }
-                    } else {
-                        self.internal_buff_v = Some(VecDeque::new());
                     }
-                    if let Some(ref mut buff) = self.internal_buff_v
-                        && let Some(frame) = buff.front()
-                        && let Some(pts) = frame.pts()
-                    {
-                        if pts == 0 {
-                            self.clock = 0.0;
-                        }
-                        if (convert_pts(
-                            pts,
-                            video.stream_info.time_base,
-                            Rational(1, self.player_frequency),
-                        ) as f64)
-                            <= self.clock
-                            && let Some(ref mut frame) = buff.pop_front()
-                        {
-                            self._player_stats.frame_count += 1;
-                            if self
-                                ._player_stats
-                                .frame_count_instant
-                                .elapsed()
-                                .as_secs_f64()
-                                > 1.0
-                            {
-                                println!("fps: {}", self._player_stats.frame_count);
-                                self._player_stats.frame_count_instant = Instant::now();
-                                self._player_stats.frame_count = 0;
-                            }
-                            print!(
-                                "tick: stream_pts {} player_timer {}",
-                                convert_pts(
-                                    pts,
-                                    video.stream_info.time_base,
-                                    Rational(1, self.player_frequency),
-                                ),
-                                self.clock
-                            );
-                            // println!("[video] {}", frame.pts().unwrap());
-                            let size = (frame.width(), frame.height());
-                            if size != self.canvas.output_size().unwrap() {
-                                let _ = self
-                                    .canvas
-                                    .window_mut()
-                                    .set_size(frame.width(), frame.height());
-                                self.video_texture = self
-                                    .canvas
-                                    .texture_creator()
-                                    .create_texture_streaming(
-                                        Some(frame.format().convert().into()),
-                                        size.0,
-                                        size.1,
-                                    )
-                                    .unwrap();
-                            }
-                            let _ = self.video_texture.with_lock(None, |buffer: &mut [u8], _| {
-                                let frame_data = frame.data_mut(0);
-                                buffer.swap_with_slice(frame_data);
-                            });
-
-                            self.canvas.clear();
-                            let _ = self.canvas.copy(&self.video_texture, None, None);
-                            self.canvas.present();
-                        }
+                    else {
                     }
                 }
 
@@ -358,6 +278,7 @@ impl MPlayer {
                     Event::Quit { .. } => {
                         self.beat = Instant::now();
                         self.should_exit = true;
+                        process::exit(0);
                     }
                     Event::Window {
                         timestamp,
