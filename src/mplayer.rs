@@ -1,7 +1,12 @@
 use std::{
-    collections::VecDeque, process, sync::{
-        mpsc::{channel, Receiver}, Arc, LazyLock, Mutex, RwLock
-    }, thread, time::{Duration, Instant}
+    collections::VecDeque,
+    process,
+    sync::{
+        Arc, LazyLock, Mutex, RwLock,
+        mpsc::{Receiver, channel},
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use ffmpeg_next::{
@@ -125,7 +130,6 @@ impl MPlayer {
         }
         // Check if there is an active decoder and obtains the frame
         if let Ok(lock) = &self.core.lock() {
-
             // Clock
             if lock.has_media {
                 let hasnt_ticket_for = self.beat.elapsed();
@@ -149,7 +153,7 @@ impl MPlayer {
                 } else {
                     self.internal_buff_v = Some(VecDeque::new());
                 }
-                
+
                 if let Some(ref mut buff) = self.internal_buff_v
                     && let Some(frame) = buff.front()
                     && let Some(pts) = frame.pts()
@@ -210,11 +214,13 @@ impl MPlayer {
                         }
                         let _ = self.video_texture.with_lock(None, |buffer: &mut [u8], _| {
                             let frame_data = frame.data_mut(0);
-                            print_at_line(format!("wrote {} bytes.", buffer.len()), 0, 8);
                             buffer.swap_with_slice(frame_data);
                         });
-                    }
-                    else {
+
+                        let _ = self.canvas.copy(&self.video_texture, None, None);
+                        self.canvas.present();
+
+                    } else {
                     }
                 }
 
