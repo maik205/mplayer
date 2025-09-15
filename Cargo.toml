@@ -6,10 +6,10 @@ edition = "2024"
 
 [dependencies]
 bad-signals = "0.1.0"
-ffmpeg-next = { version = "7.1.0", features = ["codec"] }
+ffmpeg-next = { version = "8", features = ["codec"] }
 num = "0.4.3"
 rand = "0.9.2"
-sdl3 = { version = "0.14.40", features = ["unsafe_textures"] }
+sdl3 = { version = "0.15.1", features = ["unsafe_textures", "use-vcpkg"] }
 sdl3-sys = "0.5.4"
 terminal_size = "0.4.3"
 vcpkg = "0.2.15"

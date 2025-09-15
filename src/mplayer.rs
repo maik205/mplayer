@@ -1,26 +1,20 @@
 use std::{
     collections::VecDeque,
     process,
-    sync::{
-        Arc, LazyLock, Mutex, RwLock,
-        mpsc::{Receiver, channel},
-    },
+    sync::{ Arc, LazyLock, Mutex, RwLock, mpsc::{ Receiver, channel } },
     thread,
-    time::{Duration, Instant},
+    time::{ Duration, Instant },
 };
 
-use ffmpeg_next::{
-    Rational,
-    frame::{Audio, Video},
-    software::scaling::Flags,
-};
+use ffmpeg_next::{ Rational, frame::{ Audio, Video }, software::scaling::Flags };
 use sdl3::{
-    EventPump, Sdl, VideoSubsystem,
-    audio::{AudioFormat, AudioSpec},
     event::Event,
-    pixels::{Color, PixelFormatEnum},
-    render::{Canvas, Texture},
+    pixels::{ Color, PixelFormat },
+    render::{ Canvas, Texture },
     video::Window,
+    EventPump,
+    Sdl,
+    VideoSubsystem,
 };
 
 use crate::{
@@ -29,11 +23,16 @@ use crate::{
     constants::ConvFormat,
     core::MPlayerCore,
     utils::{
-        MDecodeOptions, Range, clear_screen, convert_pts, move_terminal_cursor, print_at_line,
+        MDecodeOptions,
+        Range,
+        clear_screen,
+        convert_pts,
+        move_terminal_cursor,
+        print_at_line,
         time_base_to_ns,
     },
 };
-use crate::{audio::MPlayerAudio, utils::calculate_wait_from_rational};
+use crate::{ audio::MPlayerAudio, utils::calculate_wait_from_rational };
 
 pub struct MPlayer {
     sdl: Sdl,
@@ -77,15 +76,13 @@ impl MPlayer {
 
         let sdl_video = sdl_ctx.video().map_err(|_| MPlayerError::SDLInitError)?;
 
-        let window =
-            sdl3::video::WindowBuilder::new(&sdl_video, "MPlayer", WINDOW_WIDTH, WINDOW_HEIGHT)
-                .resizable()
-                .build()
-                .map_err(|_| MPlayerError::WindowCreationFailed)?;
+        let window = sdl3::video::WindowBuilder
+            ::new(&sdl_video, "MPlayer", WINDOW_WIDTH, WINDOW_HEIGHT)
+            .resizable()
+            .build()
+            .map_err(|_| MPlayerError::WindowCreationFailed)?;
 
-        let sdl_event_pump = sdl_ctx
-            .event_pump()
-            .map_err(|_| MPlayerError::EventPumpError)?;
+        let sdl_event_pump = sdl_ctx.event_pump().map_err(|_| MPlayerError::EventPumpError)?;
 
         let mut canvas = window.into_canvas();
         canvas.set_draw_color(Color::RGB(100, 2, 0));
@@ -93,11 +90,7 @@ impl MPlayer {
         let texture_creator = canvas.texture_creator();
 
         let video_texture = texture_creator
-            .create_texture_streaming(
-                Some(PixelFormatEnum::RGB24.into()),
-                WINDOW_WIDTH,
-                WINDOW_HEIGHT,
-            )
+            .create_texture_streaming(Some(PixelFormat::RGB24.into()), WINDOW_WIDTH, WINDOW_HEIGHT)
             .map_err(|_| MPlayerError::TextureCreationFailed)?;
 
         let core = Arc::new(Mutex::new(MPlayerCore::new(Some(&OPTS))));
@@ -133,12 +126,15 @@ impl MPlayer {
             // Clock
             if lock.has_media {
                 let hasnt_ticket_for = self.beat.elapsed();
-                if hasnt_ticket_for.as_nanos() > time_base_to_ns(Rational(1, self.player_frequency))
+                if
+                    hasnt_ticket_for.as_nanos() >
+                    time_base_to_ns(Rational(1, self.player_frequency))
                 {
-                    self.clock += hasnt_ticket_for.as_nanos() as f64
-                        / time_base_to_ns(Rational(1, self.player_frequency)) as f64;
+                    self.clock +=
+                        (hasnt_ticket_for.as_nanos() as f64) /
+                        (time_base_to_ns(Rational(1, self.player_frequency)) as f64);
                     self.beat = Instant::now();
-                    print_at_line(format!("clock: {}", self.clock,), 0, 0);
+                    print_at_line(format!("clock: {}", self.clock), 0, 0);
                 }
             }
 
@@ -154,29 +150,26 @@ impl MPlayer {
                     self.internal_buff_v = Some(VecDeque::new());
                 }
 
-                if let Some(ref mut buff) = self.internal_buff_v
-                    && let Some(frame) = buff.front()
-                    && let Some(pts) = frame.pts()
+                if
+                    let Some(ref mut buff) = self.internal_buff_v &&
+                    let Some(frame) = buff.front() &&
+                    let Some(pts) = frame.pts()
                 {
                     if pts == 0 {
                         self.clock = 0.0;
                     }
-                    if (convert_pts(
-                        pts,
-                        video.stream_info.time_base,
-                        Rational(1, self.player_frequency),
-                    ) as f64)
-                        <= self.clock
-                        && let Some(ref mut frame) = buff.pop_front()
+                    if
+                        (
+                            convert_pts(
+                                pts,
+                                video.stream_info.time_base,
+                                Rational(1, self.player_frequency)
+                            ) as f64
+                        ) <= self.clock &&
+                        let Some(ref mut frame) = buff.pop_front()
                     {
                         self._player_stats.frame_count += 1;
-                        if self
-                            ._player_stats
-                            .frame_count_instant
-                            .elapsed()
-                            .as_secs_f64()
-                            > 1.0
-                        {
+                        if self._player_stats.frame_count_instant.elapsed().as_secs_f64() > 1.0 {
                             print_at_line(format!("fps: {}", self._player_stats.frame_count), 0, 4);
                             self._player_stats.frame_count_instant = Instant::now();
                             self._player_stats.frame_count = 0;
@@ -188,26 +181,24 @@ impl MPlayer {
                                 convert_pts(
                                     pts,
                                     video.stream_info.time_base,
-                                    Rational(1, self.player_frequency),
-                                ),
+                                    Rational(1, self.player_frequency)
+                                )
                             ),
                             0,
-                            2,
+                            2
                         );
                         // println!("[video] {}", frame.pts().unwrap());
                         let size = (frame.width(), frame.height());
                         if size != self.canvas.output_size().unwrap() {
-                            let _ = self
-                                .canvas
+                            let _ = self.canvas
                                 .window_mut()
                                 .set_size(frame.width(), frame.height());
-                            self.video_texture = self
-                                .canvas
+                            self.video_texture = self.canvas
                                 .texture_creator()
                                 .create_texture_streaming(
                                     Some(frame.format().convert().into()),
                                     size.0,
-                                    size.1,
+                                    size.1
                                 )
                                 .unwrap();
                             print_at_line("resized".to_string(), 0, 10);
@@ -219,7 +210,6 @@ impl MPlayer {
 
                         let _ = self.canvas.copy(&self.video_texture, None, None);
                         self.canvas.present();
-
                     } else {
                     }
                 }
@@ -236,20 +226,23 @@ impl MPlayer {
                     } else {
                         self.internal_buff_a = Some(VecDeque::new());
                     }
-                    if let Some(ref mut buff) = self.internal_buff_a
-                        && let Some(frame) = buff.front()
-                        && let Some(pts) = frame.pts()
+                    if
+                        let Some(ref mut buff) = self.internal_buff_a &&
+                        let Some(frame) = buff.front() &&
+                        let Some(pts) = frame.pts()
                     {
                         if pts == 0 {
                             self.clock = 0.0;
                         }
-                        if (convert_pts(
-                            pts,
-                            audio.stream_info.time_base,
-                            Rational(1, self.player_frequency),
-                        ) as f64)
-                            <= self.clock
-                            && let Some(frame) = buff.pop_front()
+                        if
+                            (
+                                convert_pts(
+                                    pts,
+                                    audio.stream_info.time_base,
+                                    Rational(1, self.player_frequency)
+                                ) as f64
+                            ) <= self.clock &&
+                            let Some(frame) = buff.pop_front()
                         {
                             print_at_line(
                                 format!(
@@ -257,11 +250,11 @@ impl MPlayer {
                                     convert_pts(
                                         pts,
                                         audio.stream_info.time_base,
-                                        Rational(1, self.player_frequency),
-                                    ),
+                                        Rational(1, self.player_frequency)
+                                    )
                                 ),
                                 0,
-                                3,
+                                3
                             );
                             if let Some(audio) = &self.audio {
                                 let _ = audio.tx.send(frame);
@@ -269,9 +262,8 @@ impl MPlayer {
                                 self.audio = Some(
                                     init_audio_subsystem(
                                         &self.sdl,
-                                        audio.stream_info.spec.unwrap(),
-                                    )
-                                    .unwrap(),
+                                        audio.stream_info.spec.clone().unwrap()
+                                    ).unwrap()
                                 );
                             }
                         }
@@ -286,16 +278,13 @@ impl MPlayer {
                         self.should_exit = true;
                         process::exit(0);
                     }
-                    Event::Window {
-                        timestamp,
-                        window_id,
-                        win_event,
-                    } => match win_event {
-                        sdl3::event::WindowEvent::Resized(w, h) => {
-                            self.beat = Instant::now();
+                    Event::Window { timestamp, window_id, win_event } =>
+                        match win_event {
+                            sdl3::event::WindowEvent::Resized(w, h) => {
+                                self.beat = Instant::now();
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    },
                     _ => {}
                 }
             }
@@ -325,10 +314,14 @@ impl MPlayer {
 
             loop {
                 let _ = tick_tx.send(());
-                thread::sleep(Duration::from_nanos(calculate_wait_from_rational(
-                    Rational(1, tps),
-                    crate::utils::TimeScale::Nano,
-                )));
+                thread::sleep(
+                    Duration::from_nanos(
+                        calculate_wait_from_rational(
+                            Rational(1, tps),
+                            crate::utils::TimeScale::Nano
+                        )
+                    )
+                );
             }
 
             // Tick tx will get dropped, closing the channel and killing threads
@@ -344,12 +337,9 @@ impl MPlayer {
             if timer.elapsed().as_secs_f32() > 2.0 {
                 // clear_screen();
                 print_at_line(
-                    format!(
-                        "[TPS] {}",
-                        tick_count as f32 / timer.elapsed().as_secs_f32()
-                    ),
+                    format!("[TPS] {}", (tick_count as f32) / timer.elapsed().as_secs_f32()),
                     0,
-                    6,
+                    6
                 );
                 tick_count = 0;
                 timer = Instant::now();

@@ -1,5 +1,5 @@
-use ffmpeg_next::format::{Pixel, Sample, sample::Type};
-use sdl3::{audio::AudioFormat, pixels::PixelFormatEnum};
+use ffmpeg_next::format::{ Pixel, Sample, sample::Type };
+use sdl3::{ audio::AudioFormat, pixels::PixelFormat };
 
 pub trait ConvFormat<To> {
     fn convert(&self) -> To;
@@ -20,26 +20,26 @@ impl ConvFormat<AudioFormat> for Sample {
     }
 }
 
-impl ConvFormat<PixelFormatEnum> for Pixel {
-    fn convert(&self) -> PixelFormatEnum {
+impl ConvFormat<PixelFormat> for Pixel {
+    fn convert(&self) -> PixelFormat {
         match self {
-            Pixel::RGB24 => PixelFormatEnum::RGB24,
-            Pixel::BGR24 => PixelFormatEnum::BGR24,
-            Pixel::ARGB => PixelFormatEnum::ARGB8888,
-            Pixel::RGBA => PixelFormatEnum::RGBA8888,
-            Pixel::ABGR => PixelFormatEnum::ABGR8888,
-            Pixel::BGRA => PixelFormatEnum::BGRA8888,
-            Pixel::RGB565LE => PixelFormatEnum::RGB565,
-            Pixel::BGR565LE => PixelFormatEnum::BGR565,
-            Pixel::NV12 => PixelFormatEnum::NV12,
-            Pixel::NV21 => PixelFormatEnum::NV21,
-            Pixel::YUYV422 => PixelFormatEnum::YUY2,
-            Pixel::UYVY422 => PixelFormatEnum::UYVY,
-            Pixel::YVYU422 => PixelFormatEnum::YVYU,
-            Pixel::RGB32 => PixelFormatEnum::RGB332,
-            Pixel::YUV420P => PixelFormatEnum::UYVY,
-            Pixel::YUV422P => PixelFormatEnum::YUY2,
-            _ => PixelFormatEnum::Unknown,
+            Pixel::RGB24 => PixelFormat::RGB24,
+            Pixel::BGR24 => PixelFormat::BGR24,
+            Pixel::ARGB => PixelFormat::ARGB8888,
+            Pixel::RGBA => PixelFormat::RGBA8888,
+            Pixel::ABGR => PixelFormat::ABGR8888,
+            Pixel::BGRA => PixelFormat::BGRA8888,
+            Pixel::RGB565LE => PixelFormat::RGB565,
+            Pixel::BGR565LE => PixelFormat::BGR565,
+            Pixel::NV12 => PixelFormat::NV12,
+            Pixel::NV21 => PixelFormat::NV21,
+            Pixel::YUYV422 => PixelFormat::YUY2,
+            Pixel::UYVY422 => PixelFormat::UYVY,
+            Pixel::YVYU422 => PixelFormat::YVYU,
+            Pixel::RGB32 => PixelFormat::RGB332,
+            Pixel::YUV420P => PixelFormat::UYVY,
+            Pixel::YUV422P => PixelFormat::YUY2,
+            _ => PixelFormat::UNKNOWN,
         }
     }
 }
