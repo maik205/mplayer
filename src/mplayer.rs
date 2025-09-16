@@ -6,7 +6,7 @@ use std::{
     time::{ Duration, Instant },
 };
 
-use ffmpeg_next::{ Rational, frame::{ Audio, Video }, software::scaling::Flags };
+use ffmpeg_next::{ frame::{ Audio, Video }, software::scaling::Flags, Frame, Rational };
 use sdl3::{
     event::Event,
     pixels::{ Color, PixelFormat },
@@ -52,6 +52,7 @@ pub struct MPlayer {
     pub player_frequency: i32,
     internal_buff_v: Option<VecDeque<Video>>,
     internal_buff_a: Option<VecDeque<Audio>>,
+    internal_buff_s: Option<VecDeque<Frame>>,
 }
 
 pub struct MPlayerStats {
@@ -115,6 +116,7 @@ impl MPlayer {
             player_frequency: 10000,
             internal_buff_a: None,
             internal_buff_v: None,
+            internal_buff_s: None,
         })
     }
     pub fn tick(&mut self, cli_command: Option<Command>) -> () {
@@ -213,59 +215,59 @@ impl MPlayer {
                     } else {
                     }
                 }
-
-                if let Some(audio) = &lock.audio {
-                    if let Some(ref mut buff) = self.internal_buff_a {
-                        if buff.len() < 10 {
-                            if let Ok(frame) = audio.output_rx.try_recv() {
-                                buff.push_back(frame);
-                            }
-                        } else {
-                            // println!("buffer cap reached");
+            }
+            // Handle audio here
+            if let Some(audio) = &lock.audio {
+                if let Some(ref mut buff) = self.internal_buff_a {
+                    if buff.len() < 10 {
+                        if let Ok(frame) = audio.output_rx.try_recv() {
+                            buff.push_back(frame);
                         }
                     } else {
-                        self.internal_buff_a = Some(VecDeque::new());
+                        // println!("buffer cap reached");
+                    }
+                } else {
+                    self.internal_buff_a = Some(VecDeque::new());
+                }
+                if
+                    let Some(ref mut buff) = self.internal_buff_a &&
+                    let Some(frame) = buff.front() &&
+                    let Some(pts) = frame.pts()
+                {
+                    if pts == 0 {
+                        self.clock = 0.0;
                     }
                     if
-                        let Some(ref mut buff) = self.internal_buff_a &&
-                        let Some(frame) = buff.front() &&
-                        let Some(pts) = frame.pts()
+                        (
+                            convert_pts(
+                                pts,
+                                audio.stream_info.time_base,
+                                Rational(1, self.player_frequency)
+                            ) as f64
+                        ) <= self.clock &&
+                        let Some(frame) = buff.pop_front()
                     {
-                        if pts == 0 {
-                            self.clock = 0.0;
-                        }
-                        if
-                            (
+                        print_at_line(
+                            format!(
+                                "audio pts: {}",
                                 convert_pts(
                                     pts,
                                     audio.stream_info.time_base,
                                     Rational(1, self.player_frequency)
-                                ) as f64
-                            ) <= self.clock &&
-                            let Some(frame) = buff.pop_front()
-                        {
-                            print_at_line(
-                                format!(
-                                    "audio pts: {}",
-                                    convert_pts(
-                                        pts,
-                                        audio.stream_info.time_base,
-                                        Rational(1, self.player_frequency)
-                                    )
-                                ),
-                                0,
-                                3
+                                )
+                            ),
+                            0,
+                            3
+                        );
+                        if let Some(audio) = &self.audio {
+                            let _ = audio.tx.send(frame);
+                        } else {
+                            self.audio = Some(
+                                init_audio_subsystem(
+                                    &self.sdl,
+                                    audio.stream_info.spec.clone().unwrap()
+                                ).unwrap()
                             );
-                            if let Some(audio) = &self.audio {
-                                let _ = audio.tx.send(frame);
-                            } else {
-                                self.audio = Some(
-                                    init_audio_subsystem(
-                                        &self.sdl,
-                                        audio.stream_info.spec.clone().unwrap()
-                                    ).unwrap()
-                                );
-                            }
                         }
                     }
                 }
