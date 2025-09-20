@@ -230,7 +230,7 @@ pub struct StreamInfo {
     pub time_base: Rational,
     pub kind: Type,
     pub fps: Option<Rational>,
-    pub spec: Option<AudioSpec>
+    pub audio_spec: Option<AudioSpec>
 }
 
 
