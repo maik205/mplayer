@@ -1,13 +1,14 @@
-use ffmpeg_next::{Stream, codec::Parameters};
+use ffmpeg_next::{ Stream, codec::Parameters };
 use sdl3::audio::AudioSpec;
 
-use crate::{constants::ConvFormat, core::StreamInfo};
+use crate::{ constants::ConvFormat, core::StreamInfo };
 
 impl ConvFormat<StreamInfo> for Stream<'_> {
     fn convert(&self) -> StreamInfo {
         let time_base = self.time_base();
-        let codec =
-            ffmpeg_next::codec::context::Context::from_parameters(self.parameters()).unwrap();
+        let codec = ffmpeg_next::codec::context::Context
+            ::from_parameters(self.parameters())
+            .unwrap();
         let kind = codec.medium();
         let mut fps = None;
         let mut spec = None;
@@ -26,7 +27,7 @@ impl ConvFormat<StreamInfo> for Stream<'_> {
                         freq: Some(audio.rate() as i32),
                         channels: Some(audio.channel_layout().channels()),
                         format: Some(audio.format().convert()),
-                    })
+                    });
                 }
             }
             _ => {}
@@ -36,6 +37,7 @@ impl ConvFormat<StreamInfo> for Stream<'_> {
             kind,
             fps,
             spec,
+            index: self.index() as i16,
         }
     }
 }
@@ -59,7 +61,7 @@ impl ConvFormat<StreamInfo> for Parameters {
                         freq: Some(audio.rate() as i32),
                         channels: Some(audio.channels() as i32),
                         format: Some(audio.format().convert()),
-                    })
+                    });
                 }
             }
             _ => {}
@@ -69,7 +71,7 @@ impl ConvFormat<StreamInfo> for Parameters {
             kind,
             fps,
             spec,
+            index: -1 
         }
     }
 }
-

@@ -1,10 +1,12 @@
 use ffmpeg_next::{
     self as ffmpeg,
     codec::{ Context, Parameters },
-    frame::{ Audio, Video },
+    decoder::Subtitle,
+    frame::{ self, Audio, Video },
     media::Type,
     Frame,
     Rational,
+    // Subtitle,
 };
 use sdl3::audio::AudioSpec;
 use std::{
@@ -96,7 +98,7 @@ impl MPlayerCore {
                     let _ = print_context_data(&input_ctx);
                     let mut video_tx = None;
                     let mut audio_tx = None;
-                    let mut subtitle_tx = None;
+                    // let mut subtitle_tx = None;
                     let (mut video_marker, mut audio_marker, mut subtitle_marker): (
                         Option<PacketMarker>,
                         Option<PacketMarker>,
@@ -153,23 +155,23 @@ impl MPlayerCore {
                         }
                     }
 
-                    if let Some(subtitle_stream) = input_ctx.streams().best(Type::Subtitle) {
-                        let (p_tx_subtitle, p_rx_subtitle) = mpsc::sync_channel(1000);
-                        subtitle_marker = Some(subtitle_stream.convert());
-                        subtitle_tx = Some(p_tx_subtitle);
-                        if let Ok(mut lock) = mutex.lock() {
-                            lock.subtitle = Some(
-                                DecodeThread::<Frame>::spawn(
-                                    subtitle_stream.parameters(),
-                                    p_rx_subtitle,
-                                    Some(ThreadConfig {
-                                        buffer_capacity: 100,
-                                        time_base: Rational(0, 1),
-                                    })
-                                )
-                            );
-                        }
-                    }
+                    // if let Some(subtitle_stream) = input_ctx.streams().best(Type::Subtitle) {
+                    //     let (p_tx_subtitle, p_rx_subtitle) = mpsc::sync_channel(1000);
+                    //     subtitle_marker = Some(subtitle_stream.convert());
+                    //     subtitle_tx = Some(p_tx_subtitle);
+                    //     if let Ok(mut lock) = mutex.lock() {
+                    //         lock.subtitle = Some(
+                    //             DecodeThread::<Frame>::subtitle(
+                    //                 subtitle_stream.parameters(),
+                    //                 p_rx_subtitle,
+                    //                 Some(ThreadConfig {
+                    //                     buffer_capacity: 100,
+                    //                     time_base: Rational(0, 1),
+                    //                 })
+                    //             )
+                    //         );
+                    //     }
+                    // }
 
                     while let Some((stream, packet)) = input_ctx.packets().next() {
                         if let Ok(command) = command_rx.try_recv() {
@@ -190,7 +192,9 @@ impl MPlayerCore {
                                     if let Some(ref mut audio_tx) = audio_tx {
                                         let _ = audio_tx.send(ThreadData::Kill);
                                     }
-
+                                    // if let Some(ref mut subtitle_tx) = subtitle_tx {
+                                    //     let _ = subtitle_tx.send(ThreadData::Kill);
+                                    // }
                                     break;
                                 }
                             }
@@ -207,11 +211,17 @@ impl MPlayerCore {
                                 continue;
                             }
                         }
-                        if let Some(marker) = &subtitle_marker && let Some(ref mut sub_tx) = subtitle_tx {
-                            if marker.stream_index == stream.index() {
-                                
-                            }
-                        }
+                        // if
+                        //     let Some(marker) = &subtitle_marker &&
+                        //     let Some(ref mut sub_tx) = subtitle_tx
+                        // {
+                        //     if marker.stream_index == stream.index() {
+                        //     }
+                        //     {
+                        //         let _ = sub_tx.send(ThreadData::Packet(packet));
+                        //         continue;
+                        //     }
+                        // }
                     }
                 }
             })
@@ -267,6 +277,7 @@ pub struct DecodeThread<OutputType> {
 #[derive(Debug, Clone, Copy)]
 pub struct StreamInfo {
     pub time_base: Rational,
+    pub index: i16,
     pub kind: Type,
     pub fps: Option<Rational>,
     pub spec: Option<AudioSpec>,
@@ -323,31 +334,32 @@ impl DecodeThread<Video> {
                 let mut frame_buffer = Video::empty();
                 let mut counter = 0;
                 while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
-                    video_decoder.send_packet(&packet).unwrap();
-                    if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
-                        if let Ok(ref mut scaler) = scaling_context {
-                            let mut output_buffer = Video::empty();
-                            if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
-                                if let Some(0) | None = output_buffer.pts() {
-                                    output_buffer.set_pts(
-                                        Some(
-                                            ((counter as f32) *
-                                                calculate_tpf_from_time_base(
-                                                    video_decoder.time_base(),
-                                                    video_decoder
-                                                        .frame_rate()
-                                                        .unwrap_or(c_stream_info.fps.unwrap())
-                                                )) as i64
-                                        )
-                                    );
+                    while let Err(_) = video_decoder.send_packet(&packet) {
+                        if let Ok(_) = video_decoder.receive_frame(&mut frame_buffer) {
+                            if let Ok(ref mut scaler) = scaling_context {
+                                let mut output_buffer = Video::empty();
+                                if let Ok(()) = scaler.run(&frame_buffer, &mut output_buffer) {
+                                    if let Some(0) | None = output_buffer.pts() {
+                                        output_buffer.set_pts(
+                                            Some(
+                                                ((counter as f32) *
+                                                    calculate_tpf_from_time_base(
+                                                        video_decoder.time_base(),
+                                                        video_decoder
+                                                            .frame_rate()
+                                                            .unwrap_or(c_stream_info.fps.unwrap())
+                                                    )) as i64
+                                            )
+                                        );
+                                    }
+                                    counter += 1;
+                                    let _ = output_tx.send(output_buffer);
                                 }
-                                counter += 1;
-                                let _ = output_tx.send(output_buffer);
-                            }
 
-                            continue;
+                                continue;
+                            }
+                            let _ = output_tx.send(frame_buffer.clone());
                         }
-                        let _ = output_tx.send(frame_buffer.clone());
                     }
                 }
             })
@@ -398,42 +410,4 @@ impl DecodeThread<Audio> {
     }
 }
 
-impl DecodeThread<Frame> {
-    pub fn spawn(
-        parameters: Parameters,
-        packet_rx: Receiver<ThreadData>,
-        config: Option<ThreadConfig>
-    ) -> DecodeThread<Frame> {
-        let config = config.unwrap_or_default();
-        let (output_tx, output_rx) = mpsc::sync_channel(config.buffer_capacity as usize);
-        let stream_info = parameters.convert();
-        let handle = thread::Builder
-            ::new()
-            .name("subtitle".to_string())
-            .spawn(move || {
-                let parameters = parameters;
-                let mut decoder = Context::from_parameters(parameters)
-                    .unwrap()
-                    .decoder()
-                    .subtitle()
-                    .unwrap();
-
-                let mut frame_buffer = unsafe { Frame::empty() };
-                while let Ok(ThreadData::Packet(packet)) = packet_rx.recv() {
-                    let _ = decoder.send_packet(&packet);
-                    if let Ok(_) = decoder.receive_frame(&mut frame_buffer) {
-                        let _ = output_tx.send(frame_buffer);
-                        frame_buffer = unsafe { Frame::empty() };
-                    }
-                }
-            })
-            .unwrap();
-
-        DecodeThread {
-            handle,
-            output_rx,
-            stream_info,
-        }
-    }
-}
 impl MediaThread {}
