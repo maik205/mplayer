@@ -8,7 +8,7 @@ use std::{
 
 use ffmpeg_next::{ frame::{ Audio, Video }, software::scaling::Flags, Frame, Rational };
 use sdl3::{
-    event::{Event, WindowEvent},
+    event::{ Event, WindowEvent },
     pixels::{ Color, PixelFormat },
     render::{ Canvas, Texture },
     video::Window,
@@ -169,13 +169,7 @@ impl MPlayer {
                         let Some(ref mut frame) = buff.pop_front()
                     {
                         self.player_stats.frame_count += 1;
-                        if self
-                            .player_stats
-                            .frame_count_instant
-                            .elapsed()
-                            .as_secs_f64()
-                            > 1.0
-                        {
+                        if self.player_stats.frame_count_instant.elapsed().as_secs_f64() > 1.0 {
                             print_at_line(format!("fps: {}", self.player_stats.frame_count), 0, 4);
                             self.player_stats.frame_count_instant = Instant::now();
                             self.player_stats.frame_count = 0;
@@ -269,7 +263,7 @@ impl MPlayer {
                             self.audio = Some(
                                 init_audio_subsystem(
                                     &self.sdl,
-                                    audio.stream_info.spec.clone().unwrap()
+                                    audio.stream_info.audio_spec.clone().unwrap()
                                 ).unwrap()
                             );
                         }
@@ -356,7 +350,8 @@ impl MPlayer {
     }
     fn handle_resize(&mut self, event: WindowEvent) -> () {
         if let WindowEvent::Resized(w, h) = event {
-            if let Ok(lock) = self.core.lock() {}
+            if let Ok(lock) = self.core.lock() {
+            }
         }
     }
 }
