@@ -8,7 +8,7 @@ use std::{
 
 use ffmpeg_next::{ frame::{ Audio, Video }, software::scaling::Flags, Frame, Rational };
 use sdl3::{
-    event::Event,
+    event::{Event, WindowEvent},
     pixels::{ Color, PixelFormat },
     render::{ Canvas, Texture },
     video::Window,
@@ -44,7 +44,7 @@ pub struct MPlayer {
     canvas: Canvas<Window>,
     video_texture: Texture,
     // will use in future to display some player stats like yt's stats for nerds
-    _player_stats: MPlayerStats,
+    player_stats: MPlayerStats,
     clock: f64,
     audio: Option<MPlayerAudio>,
     // Heartbeat
@@ -56,7 +56,6 @@ pub struct MPlayer {
 }
 
 pub struct MPlayerStats {
-    time_to_present: f32,
     frame_count: u16,
     frame_count_instant: Instant,
 }
@@ -67,7 +66,7 @@ const WINDOW_HEIGHT: u32 = 100;
 pub static OPTS: MDecodeOptions = MDecodeOptions {
     scaling_flag: Flags::BILINEAR,
     look_range: Range { min: 10, max: 100 },
-    window_default_size: (1920, 1080),
+    window_default_size: (1280, 720),
     pixel_format: ffmpeg_next::format::Pixel::RGB24,
 };
 
@@ -105,8 +104,7 @@ impl MPlayer {
             core,
             canvas,
             video_texture,
-            _player_stats: MPlayerStats {
-                time_to_present: -1.0,
+            player_stats: MPlayerStats {
                 frame_count: 0,
                 frame_count_instant: Instant::now(),
             },
@@ -170,11 +168,17 @@ impl MPlayer {
                         ) <= self.clock &&
                         let Some(ref mut frame) = buff.pop_front()
                     {
-                        self._player_stats.frame_count += 1;
-                        if self._player_stats.frame_count_instant.elapsed().as_secs_f64() > 1.0 {
-                            print_at_line(format!("fps: {}", self._player_stats.frame_count), 0, 4);
-                            self._player_stats.frame_count_instant = Instant::now();
-                            self._player_stats.frame_count = 0;
+                        self.player_stats.frame_count += 1;
+                        if self
+                            .player_stats
+                            .frame_count_instant
+                            .elapsed()
+                            .as_secs_f64()
+                            > 1.0
+                        {
+                            print_at_line(format!("fps: {}", self.player_stats.frame_count), 0, 4);
+                            self.player_stats.frame_count_instant = Instant::now();
+                            self.player_stats.frame_count = 0;
                         }
 
                         print_at_line(
@@ -350,10 +354,11 @@ impl MPlayer {
         }
         let _ = timer_t.join();
     }
-    // I will handle resize later...
-    // fn handle_resize(&mut self, event: WindowEvent) -> () {
-    //     if let WindowEvent::Resized(w, h) = event {}
-    // }
+    fn handle_resize(&mut self, event: WindowEvent) -> () {
+        if let WindowEvent::Resized(w, h) = event {
+            if let Ok(lock) = self.core.lock() {}
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -11,8 +11,10 @@ use sdl3::{
 
 pub fn init_audio_subsystem(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, Error> {
     let audio = sdl.audio()?;
-    let (tx, rx) = mpsc::sync_channel(50);
+    let (tx, rx) = mpsc::sync_channel(100);
     let ctx = MPlayerAudioCallbackCtx::new(rx);
+    let mut spec = spec;
+    spec.channels = Some(2);
 
     let device = match spec.format {
         Some(sdl3::audio::AudioFormat::S16LE) => {
@@ -24,7 +26,7 @@ pub fn init_audio_subsystem(sdl: &Sdl, spec: AudioSpec) -> Result<MPlayerAudio, 
         Some(sdl3::audio::AudioFormat::F32LE) => {
             let mut spec = spec;
             if let Some(freq) = spec.freq {
-                let _ = spec.freq.insert(freq / 2);
+                let _ = spec.freq.insert(freq / spec.channels.unwrap());
             }
             audio.open_playback_stream::<MPlayerAudioCallbackCtx, f32>(&spec, ctx)?
         }

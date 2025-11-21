@@ -36,8 +36,7 @@ impl ConvFormat<StreamInfo> for Stream<'_> {
             time_base,
             kind,
             fps,
-            spec,
-            index: self.index() as i16,
+            audio_spec: spec,
         }
     }
 }
@@ -70,8 +69,7 @@ impl ConvFormat<StreamInfo> for Parameters {
             time_base,
             kind,
             fps,
-            spec,
-            index: -1 
+            audio_spec: spec,
         }
     }
 }

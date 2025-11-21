@@ -280,7 +280,7 @@ pub struct StreamInfo {
     pub index: i16,
     pub kind: Type,
     pub fps: Option<Rational>,
-    pub spec: Option<AudioSpec>,
+    pub audio_spec: Option<AudioSpec>
 }
 
 impl DecodeThread<Video> {
